@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<style>
+  /* Critical styles to prevent flash */
+  :root {
+    --bg-color: #FFFFFF;
+    --text-color: #262626;
+    --code-bg: #f7f7f7;
+    --diagram-bg: #f7f7f7;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg-color: #23282D;
+      --text-color: #E7E9EA;
+      --code-bg: #282e33;
+      --diagram-bg: #282e33;
+    }
+  }
+
+  .darkmode {
+    --bg-color: #23282D;
+    --text-color: #E7E9EA;
+    --code-bg: #282e33;
+    --diagram-bg: #282e33;
+  }
+
+  html, body {
+    background: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 0;
+  }
+
+  img {
+    image-rendering: auto;
+    color-scheme: only light;
+    image-orientation: from-image;
+    max-width: 100%;
+    height: auto;
+  }
+
+  @font-face {
+    font-family: 'TsangerJinKai02-W04';
+    font-display: fallback;
+    src: url('/fonts/TsangerJinKai02-W04.ttf') format('truetype');
+  }
+
+  #write { margin: 0; max-width: 100%; padding: 0 28px 80px; box-sizing: border-box; }
+</style>
+
+<link rel="stylesheet" href="/css/typography.css">
+<link rel="stylesheet" href="/css/katex.min.css">
+<link rel="stylesheet" href="/css/tocbot.css">
+<link rel="stylesheet" href="/css/theme-light.css">
+<link rel="stylesheet" href="/css/theme-dark.css">
+<link rel="stylesheet" href="/css/base.css">
+<link rel="stylesheet" href="/css/diagrams.css">
+
+<script defer src="/js/highlight.min.js"></script>
+<script defer src="/js/mermaid.min.js"></script>
+<script defer src="/js/plantuml-encoder.min.js"></script>
+<script defer src="/js/katex.min.js"></script>
+<script defer src="/js/auto-render.min.js"></script>
+<script defer src="/js/emoji.min.js"></script>
+<script defer src="/js/d3.min.js"></script>
+<script defer src="/js/markmap.min.js"></script>
+<script defer src="/js/markmap-view.min.js"></script>
+<script defer src="/js/lightense.min.js"></script>
+<script defer src="/js/tocbot.min.js"></script>
+
+<!-- MiaoYan Modular Scripts -->
+<script defer src="/js/theme-config.js"></script>
+<script defer src="/js/common.js"></script>
+<script defer src="/js/theme-manager.js"></script>
+<script defer src="/js/diagram-handler.js"></script>
+<script defer src="/js/app.js"></script>
+</head>
+
+<body>
+<div class="toc-hover-trigger"></div>
+<nav class="toc-nav">
+  <div class="toc-content"></div>
+  <button class="toc-pin-btn" title="Pin TOC" aria-label="Pin TOC">
+    <svg class="pin-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M16 9V4a2 2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v5m0 0l-2 2v2h12v-2l-2-2m-8 0h8m-4 6v7" />
+    </svg>
+  </button>
+</nav>
+<div class="markdown-body heti" id="write"></div>
+
+<script>
+/* ---- Bridge for parent frame ---- */
+var _pendingHtml = '';
+var _pendingDark = false;
+var _libsReady = false;
+var _domReady = false;
+
+function applyTheme(isDark) {
+  document.documentElement.classList.toggle('darkmode', isDark);
+  document.body.classList.toggle('darkmode', isDark);
+  var write = document.getElementById('write');
+  if (write) write.classList.toggle('darkmode', isDark);
+  if (window.ThemeConfig) {
+    window.ThemeConfig.applyCSSVariables(isDark);
+    if (isDark) window.ThemeConfig.applyDarkModeStyles();
+  }
+}
+
+function doRender() {
+  if (!window.MiaoYanCommon || !window.DiagramHandler) {
+    /* Defer scripts may not have executed yet, retry */
+    setTimeout(doRender, 100);
+    return;
+  }
+
+  MiaoYanCommon.initializeCore();
+  MiaoYanCommon.setupInteractiveCheckboxes();
+  MiaoYanCommon.setupHeaderAnchors();
+  MiaoYanCommon.setupFootnoteLinks();
+  MiaoYanCommon.optimizeImages();
+  MiaoYanCommon.setupImageZoom();
+  DiagramHandler.initializeAll();
+
+  if (window.renderMathInElement) {
+    var renderMath = function() {
+      renderMathInElement(document.body, {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "$", right: "$", display: false },
+          { left: "\\(", right: "\\)", display: false },
+          { left: "\\[", right: "\\]", display: true }
+        ],
+        processEscapes: true,
+        ignoredClasses: ['katex-display', 'katex', 'skip-math-dollar']
+      });
+    };
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(renderMath, { timeout: 200 });
+    } else {
+      setTimeout(renderMath, 0);
+    }
+  }
+  window.parent.postMessage({ type: 'preview-rendered' }, '*');
+  // Rebuild scroll anchors after all content (including diagrams/math) is ready
+  if (window.__miaoyanSync) {
+    setTimeout(function() { window.__miaoyanSync.rebuild(); }, 150);
+  }
+}
+
+function setContent(html, isDark) {
+  _pendingDark = isDark;
+  applyTheme(isDark);
+
+  var write = document.getElementById('write');
+  if (!write) { _pendingHtml = html; return; }
+
+  /* Reset previous diagram rendering state */
+  write.querySelectorAll('[data-processed]').forEach(function(el) {
+    el.removeAttribute('data-processed');
+  });
+  write.querySelectorAll('[data-mermaid-rendered]').forEach(function(el) {
+    el.removeAttribute('data-mermaid-rendered');
+  });
+  write.querySelectorAll('[data-markmap-rendered]').forEach(function(el) {
+    el.removeAttribute('data-markmap-rendered');
+  });
+  if (window.DiagramHandler) {
+    window.DiagramHandler._svgCache = new Map();
+  }
+
+  write.innerHTML = html;
+
+  /* WikiLinks post-processing (before render, so diagrams aren't affected) */
+  var text = write.innerHTML;
+  text = text.replace(/\[\[([^\]]+)\]\]/g, '<span class="wikilink" data-title="$1">$1</span>');
+  if (text !== write.innerHTML) {
+    write.innerHTML = text;
+  }
+  write.querySelectorAll('.wikilink').forEach(function(el) {
+    el.addEventListener('click', function() {
+      window.parent.postMessage({ type: 'wikilink-navigate', title: el.dataset.title }, '*');
+    });
+  });
+
+  doRender();
+}
+
+/* ---- DOMContentLoaded initialization (matches original flow) ---- */
+document.addEventListener('DOMContentLoaded', function() {
+  _domReady = true;
+  /* If content was already sent, render it now */
+  if (_pendingHtml) {
+    setContent(_pendingHtml, _pendingDark);
+  }
+});
+
+/* ---- Scroll sync (VS Code algorithm, same as original MiaoYan) ---- */
+(function() {
+  var anchors = [];
+  var rebuildTimer = null;
+  var rafId = null;
+  var lastReportedLine = -1;
+  var suppressUntil = 0; // timestamp until which we suppress scroll reporting
+
+  function rebuildAnchors() {
+    var els = document.querySelectorAll('[data-sourcepos]');
+    var result = [];
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.offsetHeight === 0) continue;
+      if (el.offsetParent === null && el !== document.body) continue;
+      var attr = el.getAttribute('data-sourcepos');
+      if (!attr) continue;
+      var line = parseInt(attr, 10);
+      if (isNaN(line) || line < 1) continue;
+      var top = el.getBoundingClientRect().top + window.scrollY;
+      result.push({ line: line, top: top });
+    }
+    result.sort(function(a, b) { return a.line - b.line; });
+    anchors = result;
+  }
+
+  function scheduleRebuild() {
+    if (rebuildTimer !== null) clearTimeout(rebuildTimer);
+    rebuildTimer = setTimeout(function() {
+      rebuildTimer = null;
+      rebuildAnchors();
+    }, 100);
+  }
+
+  function lineForScroll(scrollY) {
+    if (anchors.length === 0) return 0;
+    if (scrollY <= anchors[0].top) return anchors[0].line;
+    var last = anchors[anchors.length - 1];
+    if (scrollY >= last.top) return last.line;
+    var lo = 0, hi = anchors.length - 1;
+    while (lo + 1 < hi) {
+      var mid = (lo + hi) >> 1;
+      if (anchors[mid].top <= scrollY) lo = mid; else hi = mid;
+    }
+    var a = anchors[lo], b = anchors[hi];
+    if (b.top === a.top) return a.line;
+    return a.line + (b.line - a.line) * (scrollY - a.top) / (b.top - a.top);
+  }
+
+  function scrollToLine(line) {
+    if (anchors.length === 0) return;
+    var first = anchors[0], last = anchors[anchors.length - 1];
+    var targetY;
+    if (line <= first.line) {
+      targetY = first.top;
+    } else if (line >= last.line) {
+      targetY = last.top;
+    } else {
+      var lo = 0, hi = anchors.length - 1;
+      while (lo + 1 < hi) {
+        var mid = (lo + hi) >> 1;
+        if (anchors[mid].line <= line) lo = mid; else hi = mid;
+      }
+      var a = anchors[lo], b = anchors[hi];
+      var frac = (b.line === a.line) ? 0 : (line - a.line) / (b.line - a.line);
+      targetY = a.top + (b.top - a.top) * frac;
+    }
+    // Suppress scroll reporting for duration of smooth scroll (approx 400ms)
+    suppressUntil = Date.now() + 400;
+    window.scrollTo({ top: targetY, behavior: 'smooth' });
+  }
+
+  // Report preview scroll back to editor
+  window.addEventListener('scroll', function() {
+    if (Date.now() < suppressUntil) return;
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(function() {
+      rafId = null;
+      var scrollY = window.pageYOffset || 0;
+      var line = lineForScroll(scrollY);
+      if (Math.abs(line - lastReportedLine) > 0.1) {
+        window.parent.postMessage({ type: 'previewScroll', line: line }, '*');
+        lastReportedLine = line;
+      }
+    });
+  }, { passive: true });
+
+  // Rebuild anchors after content changes
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(scheduleRebuild).observe(document.body);
+  }
+
+  window.__miaoyanSync = {
+    rebuild: rebuildAnchors,
+    scrollToLine: scrollToLine,
+    lineForScroll: lineForScroll
+  };
+})();
+
+window.addEventListener('message', function(e) {
+  if (!e.data) return;
+  if (e.data.type === 'setContent') {
+    if (_domReady) {
+      setContent(e.data.html, e.data.isDark);
+    } else {
+      _pendingHtml = e.data.html;
+      _pendingDark = e.data.isDark;
+    }
+  } else if (e.data.type === 'applyTheme') {
+    applyTheme(e.data.isDark);
+  } else if (e.data.type === 'scrollToLine') {
+    if (window.__miaoyanSync) window.__miaoyanSync.scrollToLine(e.data.line);
+  } else if (e.data.type === 'getHeadings') {
+    window.parent.postMessage({ type: 'headings', headings: getHeadings() }, '*');
+  }
+});
+
+function getHeadings() {
+  var headings = [];
+  document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function(el) {
+    headings.push({ level: parseInt(el.tagName[1]), text: el.textContent.trim(), id: el.id || el.textContent.trim() });
+  });
+  return headings;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+{
+  "app": {
+    "name": "MiaoYan",
+    "loading": "Loading...",
+    "selectFolder": "Select Notes Folder",
+    "subtitle": "A lightweight Markdown editor"
+  },
+  "sidebar": {
+    "folders": "Folders",
+    "allNotes": "All Notes",
+    "newFolder": "New folder name:"
+  },
+  "notesList": {
+    "search": "Search...",
+    "noResults": "No results",
+    "noNotes": "No notes yet",
+    "empty": "No notes yet",
+    "notes": "notes",
+    "newNote": "New note"
+  },
+  "sort": {
+    "modified": "Modified",
+    "created": "Created",
+    "title": "Title"
+  },
+  "editor": {
+    "selectNote": "Select a note or create a new one"
+  },
+  "toolbar": {
+    "toggleSidebar": "Toggle sidebar",
+    "toggleNotesList": "Toggle notes list",
+    "edit": "Edit",
+    "split": "Split",
+    "view": "View",
+    "toc": "Table of Contents",
+    "presentation": "Presentation",
+    "settings": "Settings",
+    "export": "Export"
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "Interface",
+    "editor": "Experience",
+    "preview": "Editor",
+    "shortcuts": "Shortcuts",
+    "storagePath": "Storage Path",
+    "theme": "Theme",
+    "language": "Language",
+    "fontFamily": "Font Family",
+    "fontSize": "Font Size",
+    "autoSaveInterval": "Auto Save Interval",
+    "splitMode": "Edit Mode",
+    "previewFont": "Preview Font",
+    "previewFontSize": "Preview Font Size",
+    "codeFont": "Code Font",
+    "change": "Change",
+    "notSet": "Not set",
+    "themeSystem": "System",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "editorOnly": "Editor Only",
+    "splitView": "Split View",
+    "previewOnly": "Preview Only",
+    "buttonDisplay": "Button Display",
+    "buttonAlways": "Always",
+    "buttonHover": "Hover",
+    "buttonHide": "Hide",
+    "alwaysOnTop": "Always on Top",
+    "yes": "Yes",
+    "no": "No",
+    "quickLaunch": "Quick Launch",
+    "clear": "Clear"
+  },
+  "contextMenu": {
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "rename": "Rename",
+    "delete": "Delete",
+    "openInFinder": "Show in File Manager",
+    "duplicate": "Duplicate"
+  },
+  "export": {
+    "pdf": "Export as PDF",
+    "html": "Export as HTML",
+    "image": "Export as Image"
+  },
+  "version": {
+    "title": "Version History",
+    "restore": "Restore this version",
+    "noVersions": "No version history"
+  },
+  "shortcuts": {
+    "newNote": "New Note",
+    "search": "Search",
+    "toggleSidebar": "Toggle Sidebar",
+    "toggleNotesList": "Toggle Notes List",
+    "togglePreview": "Toggle Preview",
+    "cycleViewMode": "Cycle View Mode",
+    "presentation": "Presentation Mode",
+    "settings": "Settings",
+    "bold": "Bold",
+    "italic": "Italic",
+    "underline": "Underline",
+    "strikethrough": "Strikethrough",
+    "link": "Insert Link",
+    "codeBlock": "Code Block",
+    "format": "Format Document",
+    "export": "Export"
+  }
+}

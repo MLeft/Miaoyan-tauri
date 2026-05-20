@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+/* TsangerJinKai02-W04 - MiaoYan signature font */
+@font-face {
+  font-family: 'TsangerJinKai02';
+  src: url('/fonts/TsangerJinKai02-W04.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* MiaoYan Design System - matching original macOS app */
+:root {
+  /* Accent - MiaoYan signature green */
+  --accent: #1C5D33;
+  --accent-hover: #175030;
+  --accent-light: rgba(28, 93, 51, 0.12);
+  --accent-icon: #1C5D33;
+
+  /* Backgrounds */
+  --bg-primary: #F5F5F5;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #EBEBEB;
+  --bg-sidebar: #F5F5F5;
+
+  /* Text */
+  --text-primary: #262626;
+  --text-secondary: #777777;
+  --text-tertiary: #999999;
+  --text-inverse: #FFFFFF;
+
+  /* Borders & dividers */
+  --border: #E0E0E0;
+  --border-light: #EBEBEB;
+
+  /* Code */
+  --code-bg: #F8F8F8;
+
+  /* Links */
+  --link: #05A69A;
+
+  /* Selection */
+  --selection-bg: #D9D9D9;
+
+  /* Toolbar */
+  --toolbar-icon: #282828;
+  --toolbar-icon-active: #1C5D33;
+  --toolbar-icon-inactive: #868686;
+
+  /* Pin */
+  --pin-color: #FFC837;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+
+  /* Font - TsangerJinKai02 as primary, system fonts as fallback */
+  font-family: 'TsangerJinKai02', -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.dark {
+  color-scheme: dark;
+
+  /* Accent - MiaoYan mint green for dark mode */
+  --accent: #54C59F;
+  --accent-hover: #48B08C;
+  --accent-light: rgba(84, 197, 159, 0.15);
+  --accent-icon: #54C59F;
+
+  /* Backgrounds - matching original #232832 */
+  --bg-primary: #232832;
+  --bg-secondary: #2A3038;
+  --bg-tertiary: #343B43;
+  --bg-sidebar: #232832;
+
+  /* Text */
+  --text-primary: #E8E8EB;
+  --text-secondary: #ABB2BF;
+  --text-tertiary: #6B737D;
+  --text-inverse: #262626;
+
+  /* Borders & dividers */
+  --border: #343A43;
+  --border-light: #3A4147;
+
+  /* Code */
+  --code-bg: #282E33;
+
+  /* Links */
+  --link: #61FFC9;
+
+  /* Selection */
+  --selection-bg: #343A43;
+
+  /* Toolbar */
+  --toolbar-icon: #FFFFFF;
+  --toolbar-icon-active: #54C59F;
+  --toolbar-icon-inactive: #868686;
+
+  /* Pin */
+  --pin-color: #FFC837;
+
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* CodeMirror overrides */
+.cm-editor {
+  height: 100% !important;
+}
+
+.cm-scroller {
+  overflow: auto !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Allotment sash - match original 1px divider */
+.sash-container .sash {
+  background: transparent !important;
+}
+
+.sash-container .sash:hover {
+  background: var(--accent) !important;
+  opacity: 0.4;
+}

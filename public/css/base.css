@@ -1,0 +1,445 @@
+/**
+ * Base Styles (Theme-independent)
+ */
+
+/* ==================== Base Layout ==================== */
+html {
+  font-size: 15px;
+  font-display: block;
+  color: var(--text-color);
+  background: var(--bg-color);
+  font-family: var(--text-font);
+  -webkit-font-smoothing: subpixel-antialiased;
+  overscroll-behavior: none;
+}
+
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--bg-color);
+  font-family: var(--text-font);
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  object-fit: cover;
+  color-rendering: optimizeQuality;
+  image-rendering: -webkit-optimize-contrast;
+  -webkit-color-correction: default;
+}
+
+/* ==================== Typography ==================== */
+.heti {
+  font-family: var(--text-font);
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.markdown-body {
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+}
+
+a {
+  color: var(--link-color);
+}
+
+/* ==================== Code Styles ==================== */
+.heti p > code,
+.heti li > code,
+code {
+  font-family: var(--code-text-font);
+  background-color: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: var(--border-radius-sm);
+}
+
+pre {
+  font-family: var(--code-text-font);
+  background-color: var(--code-bg);
+  padding: 16px;
+  border-radius: var(--border-radius);
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
+}
+
+pre code {
+  font-family: var(--code-text-font);
+  background-color: var(--code-bg);
+}
+
+/* ==================== Tables ==================== */
+.heti table {
+  border-color: var(--border-color);
+  color: var(--text-color);
+  max-width: 100%;
+  table-layout: auto;
+  box-sizing: border-box;
+}
+
+.heti th,
+.heti td {
+  border-color: var(--border-color);
+  color: var(--text-color);
+}
+
+/* ==================== Blockquote ==================== */
+.heti blockquote {
+  border-left-color: var(--blockquote-border-color);
+}
+
+.heti blockquote ol,
+.heti blockquote ul {
+  margin-block-end: 0.4em !important;
+}
+
+.heti blockquote ol,
+.heti blockquote ul,
+.heti blockquote li {
+  line-height: 1.74 !important;
+}
+
+/* ==================== HR ==================== */
+.heti hr {
+  background-color: var(--border-color);
+}
+
+/* ==================== Form Elements ==================== */
+input[type='checkbox'] {
+  border: 1px solid var(--border-color);
+}
+
+/* ==================== Code Line Numbers ==================== */
+pre code,
+.heti pre code {
+  background-color: transparent;
+}
+
+pre .hljs-ln,
+.heti pre .hljs-ln {
+  border: none;
+  width: 100%;
+}
+
+pre .hljs-ln td,
+.heti pre .hljs-ln td {
+  border: none;
+  background: transparent !important;
+  padding: 0;
+}
+
+pre .hljs-ln tr,
+.heti pre .hljs-ln tr,
+pre .hljs-ln-line,
+.heti pre .hljs-ln-line {
+  background: transparent !important;
+}
+
+pre .hljs-ln-numbers,
+.heti pre .hljs-ln-numbers {
+  user-select: none;
+  color: var(--border-color);
+  opacity: 0.7;
+  padding: 0 12px 0 0;
+  text-align: right;
+}
+
+pre .hljs-ln-code,
+.heti pre .hljs-ln-code {
+  padding-left: 12px;
+}
+
+pre code,
+.heti pre code,
+pre code.hljs {
+  display: block;
+  background: transparent !important;
+  color: var(--text-color);
+}
+
+pre table.hljs-ln,
+.heti pre table.hljs-ln {
+  width: 100%;
+  border: none;
+  margin: 0;
+  background: transparent;
+}
+
+/* ==================== Syntax Highlighting ==================== */
+.hljs {
+  color: var(--hljs-base);
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--hljs-comment);
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-deletion {
+  color: var(--hljs-keyword);
+}
+
+.hljs-string,
+.hljs-addition {
+  color: var(--hljs-string);
+}
+
+.hljs-number,
+.hljs-literal {
+  color: var(--hljs-number);
+}
+
+.hljs-attribute,
+.hljs-variable {
+  color: var(--hljs-attribute);
+}
+
+.hljs-title,
+.hljs-section {
+  color: var(--hljs-title);
+}
+
+/* Dark mode syntax highlighting */
+.darkmode .hljs {
+  color: var(--hljs-base);
+  background: var(--code-bg) !important;
+}
+
+.darkmode .hljs-comment,
+.darkmode .hljs-quote {
+  color: var(--hljs-comment);
+}
+
+.darkmode .hljs-doctag,
+.darkmode .hljs-formula,
+.darkmode .hljs-keyword {
+  color: var(--hljs-keyword);
+}
+
+.darkmode .hljs-deletion,
+.darkmode .hljs-name,
+.darkmode .hljs-section,
+.darkmode .hljs-selector-tag,
+.darkmode .hljs-subst,
+.darkmode .hljs-built_in,
+.darkmode .hljs-class .hljs-title,
+.darkmode .hljs-title.class_ {
+  color: #ED716C;
+}
+
+.darkmode .hljs-literal {
+  color: #56b6c2;
+}
+
+.darkmode .hljs-addition,
+.darkmode .hljs-attribute,
+.darkmode .hljs-meta .hljs-string,
+.darkmode .hljs-regexp,
+.darkmode .hljs-string {
+  color: var(--hljs-string);
+}
+
+.darkmode .hljs-attr,
+.darkmode .hljs-number,
+.darkmode .hljs-selector-attr,
+.darkmode .hljs-selector-class,
+.darkmode .hljs-selector-pseudo,
+.darkmode .hljs-template-variable,
+.darkmode .hljs-type,
+.darkmode .hljs-variable {
+  color: var(--hljs-number);
+}
+
+.darkmode .hljs-bullet,
+.darkmode .hljs-link,
+.darkmode .hljs-meta,
+.darkmode .hljs-selector-id,
+.darkmode .hljs-symbol,
+.darkmode .hljs-title {
+  color: var(--hljs-title);
+}
+
+.darkmode .hljs-emphasis {
+  font-style: italic;
+}
+
+.darkmode .hljs-strong {
+  font-weight: 700;
+}
+
+.darkmode .hljs-link {
+  text-decoration: underline;
+}
+
+/* ==================== Emoji Support ==================== */
+span.emoji {
+  display: -moz-inline-box;
+  -moz-box-orient: vertical;
+  display: inline-block;
+  vertical-align: baseline;
+  width: 1em;
+  height: 1em;
+  background-size: contain;
+  background-repeat: no-repeat;
+  text-indent: -9999px;
+  background-position: 50% 50%;
+}
+
+span.emoji-sizer {
+  line-height: 0.81em;
+  font-size: 1em;
+  margin: -2px 0;
+}
+
+span.emoji-outer {
+  display: -moz-inline-box;
+  display: inline-block;
+  height: 1em;
+  width: 1em;
+}
+
+span.emoji-inner {
+  display: -moz-inline-box;
+  display: inline-block;
+  text-indent: -9999px;
+  width: 100%;
+  height: 100%;
+  vertical-align: baseline;
+}
+
+img.emoji {
+  width: 1em;
+  height: 1em;
+}
+
+/* ==================== Images ==================== */
+
+#write>img,
+#write>p>img,
+#write>table>img {
+  cursor: zoom-in;
+}
+
+img.border {
+  border-width: 36px;
+  border-style: solid;
+  border-image-source: url(https://gw.alipayobjects.com/zos/k/y1/lpOIMY.png);
+  border-image-slice: 30;
+  border-image-repeat: stretch;
+  border-radius: var(--border-radius-lg);
+  clip-path: inset(0 round 6px);
+}
+
+.markdown-body img,
+.markdown-body video {
+  border-radius: var(--border-radius-lg);
+}
+
+/* ==================== Media Queries ==================== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-color: #23282D;
+    --text-color: #E7E9EA;
+    --link-color: #1D9BF0;
+    --border-color: #454545;
+    --code-bg: #282e33;
+    --diagram-bg: #282e33;
+    --blockquote-border-color: #545454;
+  }
+
+  html {
+    color: var(--text-color);
+  }
+
+  body {
+    background: var(--bg-color);
+  }
+
+  .heti hr {
+    background-color: var(--border-color);
+  }
+
+  .heti blockquote {
+    border-left-color: var(--blockquote-border-color);
+  }
+
+  .heti pre,
+  .mermaid-image-container,
+  .markmap-image-container,
+  .plantuml-image-container,
+  pre:has(.language-mermaid) {
+    background-color: var(--diagram-bg);
+  }
+
+  .heti table,
+  .heti th,
+  .heti td {
+    border-color: var(--border-color);
+  }
+
+  .heti p > code,
+  .heti li > code {
+    background-color: var(--code-bg);
+    color: var(--text-color);
+  }
+
+  .heti mark {
+    background-color: rgba(77, 74, 0, 0.88);
+  }
+
+  .heti sup:target,
+  .heti sup a:target,
+  .heti .heti-fn li:target {
+    background-color: #3a6188;
+  }
+
+  .heti u[title] {
+    border-block-end-color: rgba(255, 255, 255, 0.54);
+  }
+
+  .heti .heti-fn {
+    border-block-start-color: var(--border-color);
+  }
+
+  .heti .footnote-definition {
+    border-block-start-color: var(--border-color);
+  }
+
+  .heti sup:target,
+  .heti sup a:target,
+  .heti .heti-fn li:target,
+  .heti .footnote-definition:target {
+    background-color: #3a6188;
+  }}
+
+/* ==================== Split-mode chrome ====================
+ * Toggled by MPreviewView.setSplitChrome via JS classList. When the host
+ * pane is part of MiaoYan's side-by-side editor view, the editor's macOS
+ * NSScrollView (left pane) is the single visible scroll indicator and
+ * the preview's WebKit-rendered scrollbar (right pane) becomes redundant.
+ * Hiding it removes the simultaneous-scrollbars flash without losing the
+ * ability to scroll: wheel/trackpad still work, and the bidirectional
+ * sync engine pushes any preview-side scroll back to the editor's
+ * scrollbar so the user keeps a position indicator.
+ *
+ * In single-preview mode (Cmd+3) and Magic PPT mode this class is not
+ * applied, so the standalone pane retains its native scrollbar.
+ */
+body.miaoyan-split-mode::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+body.miaoyan-split-mode {
+  scrollbar-width: none;
+}

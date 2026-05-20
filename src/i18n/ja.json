@@ -1,0 +1,108 @@
+{
+  "app": {
+    "name": "MiaoYan",
+    "loading": "読み込み中...",
+    "selectFolder": "ノートフォルダを選択",
+    "subtitle": "軽量 Markdown エディタ"
+  },
+  "sidebar": {
+    "folders": "フォルダ",
+    "allNotes": "すべてのノート",
+    "newFolder": "新しいフォルダ名："
+  },
+  "notesList": {
+    "search": "検索...",
+    "noResults": "結果なし",
+    "noNotes": "ノートなし",
+    "empty": "ノートなし",
+    "notes": "件のノート",
+    "newNote": "新規ノート"
+  },
+  "sort": {
+    "modified": "更新日時",
+    "created": "作成日時",
+    "title": "タイトル"
+  },
+  "editor": {
+    "selectNote": "ノートを選択するか、新しいノートを作成してください"
+  },
+  "toolbar": {
+    "toggleSidebar": "サイドバー切り替え",
+    "toggleNotesList": "ノートリスト切り替え",
+    "edit": "編集",
+    "split": "分割",
+    "view": "プレビュー",
+    "settings": "設定",
+    "export": "エクスポート"
+  },
+  "settings": {
+    "title": "設定",
+    "general": "インターフェース",
+    "editor": "エクスペリエンス",
+    "preview": "編集",
+    "shortcuts": "ショートカット",
+    "storagePath": "ノートの場所",
+    "theme": "外観",
+    "language": "言語",
+    "fontFamily": "フォント",
+    "fontSize": "フォントサイズ",
+    "autoSaveInterval": "自動保存間隔",
+    "splitMode": "編集モード",
+    "previewFont": "プレビューフォント",
+    "previewFontSize": "プレビューフォントサイズ",
+    "codeFont": "コードフォント",
+    "change": "変更",
+    "notSet": "未設定",
+    "themeSystem": "システムに従う",
+    "themeLight": "ライト",
+    "themeDark": "ダーク",
+    "editorOnly": "編集モード",
+    "splitView": "分割モード",
+    "previewOnly": "プレビューモード",
+    "buttonDisplay": "ボタン表示",
+    "buttonAlways": "常に表示",
+    "buttonHover": "ホバー時表示",
+    "buttonHide": "非表示",
+    "alwaysOnTop": "最前面表示",
+    "yes": "はい",
+    "no": "いいえ",
+    "quickLaunch": "クイック起動",
+    "clear": "クリア"
+  },
+  "contextMenu": {
+    "pin": "ピン留め",
+    "unpin": "ピン解除",
+    "rename": "名前変更",
+    "delete": "削除",
+    "openInFinder": "ファイルマネージャで表示",
+    "duplicate": "複製"
+  },
+  "export": {
+    "pdf": "PDFとしてエクスポート",
+    "html": "HTMLとしてエクスポート",
+    "image": "画像としてエクスポート"
+  },
+  "version": {
+    "title": "バージョン履歴",
+    "restore": "このバージョンを復元",
+    "noVersions": "バージョン履歴なし"
+  },
+  "shortcuts": {
+    "newNote": "新規ノート",
+    "search": "検索",
+    "toggleSidebar": "サイドバー切り替え",
+    "toggleNotesList": "ノートリスト切り替え",
+    "togglePreview": "プレビュー切り替え",
+    "cycleViewMode": "表示モード切り替え",
+    "presentation": "プレゼンテーション",
+    "settings": "設定",
+    "bold": "太字",
+    "italic": "斜体",
+    "underline": "下線",
+    "strikethrough": "取り消し線",
+    "link": "リンク挿入",
+    "codeBlock": "コードブロック",
+    "format": "ドキュメント整形",
+    "export": "エクスポート"
+  }
+}

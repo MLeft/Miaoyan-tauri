@@ -1,0 +1,111 @@
+{
+  "app": {
+    "name": "妙言",
+    "loading": "加载中...",
+    "selectFolder": "选择笔记文件夹",
+    "subtitle": "轻量级 Markdown 编辑器"
+  },
+  "sidebar": {
+    "folders": "文件夹",
+    "allNotes": "全部笔记",
+    "newFolder": "新文件夹名称："
+  },
+  "notesList": {
+    "search": "搜索...",
+    "noResults": "无结果",
+    "noNotes": "暂无笔记",
+    "empty": "暂无笔记",
+    "notes": "篇笔记",
+    "newNote": "新建笔记"
+  },
+  "sort": {
+    "modified": "修改时间",
+    "created": "创建时间",
+    "title": "标题"
+  },
+  "editor": {
+    "selectNote": "选择一个笔记或创建新笔记"
+  },
+  "toolbar": {
+    "toggleSidebar": "切换侧边栏",
+    "toggleNotesList": "切换笔记列表",
+    "edit": "编辑",
+    "split": "分屏",
+    "view": "预览",
+    "toc": "目录",
+    "presentation": "演示",
+    "settings": "设置",
+    "export": "导出"
+  },
+  "settings": {
+    "title": "设置",
+    "general": "界面",
+    "editor": "体验",
+    "preview": "编辑",
+    "shortcuts": "快捷键",
+    "storagePath": "笔记位置",
+    "theme": "外观颜色",
+    "language": "界面语言",
+    "fontFamily": "字体",
+    "fontSize": "字号",
+    "autoSaveInterval": "自动保存间隔",
+    "splitMode": "编辑模式",
+    "previewFont": "预览字体",
+    "previewFontSize": "预览字号",
+    "codeFont": "代码字体",
+    "change": "更改",
+    "notSet": "未设置",
+    "themeSystem": "跟随系统",
+    "themeLight": "浅色",
+    "themeDark": "深色",
+    "editorOnly": "编辑模式",
+    "splitView": "分栏模式",
+    "previewOnly": "预览模式",
+    "buttonDisplay": "按钮显示",
+    "buttonAlways": "始终显示",
+    "buttonHover": "悬停显示",
+    "buttonHide": "隐藏",
+    "alwaysOnTop": "置顶显示",
+    "yes": "是",
+    "no": "否",
+    "quickLaunch": "快捷唤起",
+    "recording": "录制中...",
+    "clear": "清除"
+  },
+  "contextMenu": {
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "rename": "重命名",
+    "delete": "删除",
+    "openInFinder": "在文件管理器中显示",
+    "duplicate": "复制"
+  },
+  "export": {
+    "pdf": "导出为 PDF",
+    "html": "导出为 HTML",
+    "image": "导出为图片"
+  },
+  "version": {
+    "title": "版本历史",
+    "restore": "恢复此版本",
+    "noVersions": "暂无版本历史"
+  },
+  "shortcuts": {
+    "newNote": "新建笔记",
+    "search": "搜索",
+    "toggleSidebar": "切换侧边栏",
+    "toggleNotesList": "切换笔记列表",
+    "togglePreview": "切换预览",
+    "cycleViewMode": "循环视图模式",
+    "presentation": "演示模式",
+    "settings": "设置",
+    "bold": "加粗",
+    "italic": "斜体",
+    "underline": "下划线",
+    "strikethrough": "删除线",
+    "link": "插入链接",
+    "codeBlock": "代码块",
+    "format": "格式化文档",
+    "export": "导出"
+  }
+}
