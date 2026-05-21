@@ -180,6 +180,24 @@ export function Editor() {
     });
   }, [isDark]);
 
+  // TOC → Editor scroll
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const line = (e as CustomEvent).detail.line as number;
+      const lineNum = Math.max(1, Math.min(Math.round(line), view.state.doc.lines));
+      const lineInfo = view.state.doc.line(lineNum);
+      suppressEditorSync.current = true;
+      view.dispatch({
+        effects: EditorView.scrollIntoView(lineInfo.from, { y: 'start', yMargin: 0 }),
+      });
+      setTimeout(() => { suppressEditorSync.current = false; }, 500);
+    };
+    window.addEventListener('editor-scroll-to-line', handler);
+    return () => window.removeEventListener('editor-scroll-to-line', handler);
+  }, []);
+
   // Preview → Editor scroll sync (with suppression to avoid echo loop)
   useEffect(() => {
     const handler = (e: Event) => {
@@ -188,7 +206,6 @@ export function Editor() {
       const line = (e as CustomEvent).detail.line as number;
       const lineNum = Math.max(1, Math.min(Math.round(line), view.state.doc.lines));
       const lineInfo = view.state.doc.line(lineNum);
-      // Suppress editor→preview echo for 200ms while we scroll the editor
       suppressEditorSync.current = true;
       view.dispatch({
         effects: EditorView.scrollIntoView(lineInfo.from, { y: 'start', yMargin: 0 }),

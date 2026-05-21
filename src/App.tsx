@@ -164,7 +164,13 @@ function EditorPane() {
   const { viewMode, showToc, toggleToc } = useEditorStore();
 
   const handleTocNavigate = (line: number) => {
+    // Always try to scroll the editor (works in editor/split modes)
     window.dispatchEvent(new CustomEvent('editor-scroll-to-line', { detail: { line } }));
+    // Also directly scroll preview iframe (needed in preview mode where editor is hidden)
+    const iframe = document.querySelector('iframe[src="/preview.html"]') as HTMLIFrameElement;
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage({ type: 'scrollToLine', line }, '*');
+    }
   };
 
   return (
