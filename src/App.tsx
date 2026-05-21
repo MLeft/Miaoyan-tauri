@@ -8,7 +8,9 @@ import { SettingsDialog } from './components/settings/SettingsDialog';
 import { PresentationMode } from './components/presentation/PresentationMode';
 import { TableOfContents } from './components/shared/TableOfContents';
 import { ExportMenu } from './components/shared/ExportMenu';
+import { Toast } from './components/shared/Toast';
 import { CombinedSidebar } from './components/sidebar/CombinedSidebar';
+import { formatMarkdown } from './services/formatter';
 import { useNotesStore } from './stores/notes-store';
 import { useSettingsStore } from './stores/settings-store';
 import { useEditorStore } from './stores/editor-store';
@@ -234,6 +236,8 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showPresentation, setShowPresentation] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
 
   useEffect(() => { loadConfig(); }, []);
 
@@ -276,7 +280,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    const handler = async (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === '1') { e.preventDefault(); useSettingsStore.getState().updateConfig({ show_sidebar: !useSettingsStore.getState().config.show_sidebar }); }
       if (mod && e.key === '3') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); setViewMode(viewMode === 'preview' ? 'split' : 'preview'); }
@@ -284,10 +288,28 @@ export default function App() {
       if (mod && e.key === '\\') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); const modes: ViewMode[] = ['editor', 'split', 'preview']; const idx = modes.indexOf(viewMode); setViewMode(modes[(idx + 1) % modes.length]); }
       if (mod && e.key === ',') { e.preventDefault(); setShowSettings(true); }
       if (mod && e.key === 'e' && e.shiftKey) { e.preventDefault(); setShowExport(p => !p); }
+      if (mod && e.key === 'l' && e.shiftKey) {
+        e.preventDefault();
+        const content = useNotesStore.getState().activeContent;
+        if (!content) return;
+        try {
+          const formatted = await formatMarkdown(content);
+          useNotesStore.getState().updateContent(formatted, '');
+          const msg = config.language?.startsWith('zh')
+            ? '自动化排版完成~'
+            : config.language === 'ja'
+            ? '自動整形完了~'
+            : 'Auto formatting done~';
+          setToastMessage(msg);
+          setToastVisible(true);
+        } catch (err) {
+          console.error('Format failed:', err);
+        }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [config.language]);
 
   if (!loaded) {
     return (
@@ -324,6 +346,7 @@ export default function App() {
       </div>
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {showPresentation && <PresentationMode onClose={() => setShowPresentation(false)} />}
+      <Toast message={toastMessage} visible={toastVisible} onClose={() => setToastVisible(false)} />
     </div>
   );
 }
