@@ -47,6 +47,12 @@ const IconSearch = () => (
   </svg>
 );
 
+const IconFormat = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 20 20" fill="currentColor">
+    <path d="M15.668 3.516A2.33 2.33 0 0 1 18 5.848v8.333a2.333 2.333 0 0 1-2.332 2.332h-.833a.666.666 0 0 1 0-1.33h.833c.553 0 1.002-.45 1.002-1.002V5.848c0-.554-.449-1.002-1.002-1.002h-.833a.665.665 0 0 1 0-1.33zM5.299 3.516a.665.665 0 0 1 0 1.302l-.134.014h-.833c-.553 0-1.002.449-1.002 1.002v8.333c0 .553.449 1.002 1.002 1.002h.833l.134.014a.665.665 0 0 1 0 1.302l-.134.014h-.833A2.333 2.333 0 0 1 2 14.167V5.834a2.33 2.33 0 0 1 2.332-2.332h.833zM7.083 9.752c.367 0 .665.298.665.665V12a.665.665 0 0 1-1.33 0v-1.583c0-.367.298-.665.665-.665M10 7.335c.367 0 .665.298.665.665v4a.665.665 0 0 1-1.33 0V8c0-.367.298-.665.665-.665M12.916 8.918c.367 0 .665.298.665.665V12a.665.665 0 0 1-1.33 0V9.583c0-.367.298-.665.665-.665"/>
+  </svg>
+);
+
 const IconTOC = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
@@ -159,25 +165,9 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
           <IconSidebar />
         </ToolbarButton>
         <span className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border)' }} />
-        <button
-          onClick={onFormat}
-          title={`${t('shortcuts.format')} (Cmd+Shift+L)`}
-          className="rounded text-xs px-2 h-6 transition-colors"
-          style={{
-            color: 'var(--toolbar-icon-inactive)',
-            border: '1px solid var(--border)',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = 'var(--toolbar-icon)';
-            e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = 'var(--toolbar-icon-inactive)';
-            e.currentTarget.style.backgroundColor = 'transparent';
-          }}
-        >
-          {t('toolbar.format')}
-        </button>
+        <ToolbarButton onClick={onFormat} title={`${t('toolbar.format')} (Cmd+Shift+L)`}>
+          <IconFormat />
+        </ToolbarButton>
       </div>
     </div>
   );
