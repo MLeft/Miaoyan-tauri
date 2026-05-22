@@ -105,11 +105,12 @@ function ToolbarButton({ onClick, active, title, children }: {
   );
 }
 
-function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExport }: {
+function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExport, onFormat }: {
   onOpenSettings: () => void;
   onTogglePresentation: () => void;
   onToggleExport: () => void;
   showExport: boolean;
+  onFormat: () => void;
 }) {
   const { t } = useTranslation();
   const { config } = useSettingsStore();
@@ -157,6 +158,26 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
         <ToolbarButton onClick={toggleSidebar} active={config.show_sidebar} title={`${t('toolbar.toggleSidebar')} (Cmd+1)`}>
           <IconSidebar />
         </ToolbarButton>
+        <span className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border)' }} />
+        <button
+          onClick={onFormat}
+          title={`${t('shortcuts.format')} (Cmd+Shift+L)`}
+          className="rounded text-xs px-2 h-6 transition-colors"
+          style={{
+            color: 'var(--toolbar-icon-inactive)',
+            border: '1px solid var(--border)',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'var(--toolbar-icon)';
+            e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'var(--toolbar-icon-inactive)';
+            e.currentTarget.style.backgroundColor = 'transparent';
+          }}
+        >
+          {t('toolbar.format')}
+        </button>
       </div>
     </div>
   );
@@ -239,6 +260,25 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
 
+  const handleFormat = async () => {
+    const content = useNotesStore.getState().activeContent;
+    if (!content) return;
+    try {
+      const formatted = await formatMarkdown(content);
+      useNotesStore.getState().updateContent(formatted, '');
+      const lang = useSettingsStore.getState().config.language ?? '';
+      const msg = lang.startsWith('zh')
+        ? '自动化排版完成~'
+        : lang === 'ja'
+        ? '自動整形完了~'
+        : 'Auto formatting done~';
+      setToastMessage(msg);
+      setToastVisible(true);
+    } catch (err) {
+      console.error('Format failed:', err);
+    }
+  };
+
   useEffect(() => { loadConfig(); }, []);
 
   useEffect(() => {
@@ -290,21 +330,7 @@ export default function App() {
       if (mod && e.key === 'e' && e.shiftKey) { e.preventDefault(); setShowExport(p => !p); }
       if (mod && e.key === 'l' && e.shiftKey) {
         e.preventDefault();
-        const content = useNotesStore.getState().activeContent;
-        if (!content) return;
-        try {
-          const formatted = await formatMarkdown(content);
-          useNotesStore.getState().updateContent(formatted, '');
-          const msg = config.language?.startsWith('zh')
-            ? '自动化排版完成~'
-            : config.language === 'ja'
-            ? '自動整形完了~'
-            : 'Auto formatting done~';
-          setToastMessage(msg);
-          setToastVisible(true);
-        } catch (err) {
-          console.error('Format failed:', err);
-        }
+        handleFormat();
       }
     };
     window.addEventListener('keydown', handler);
@@ -330,6 +356,7 @@ export default function App() {
         onTogglePresentation={() => setShowPresentation(true)}
         onToggleExport={() => setShowExport(p => !p)}
         showExport={showExport}
+        onFormat={handleFormat}
       />
       <div className="flex-1 overflow-hidden relative">
         <Allotment>

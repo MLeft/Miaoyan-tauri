@@ -35,7 +35,8 @@
     "toc": "目录",
     "presentation": "演示",
     "settings": "设置",
-    "export": "导出"
+    "export": "导出",
+    "format": "排版"
   },
   "settings": {
     "title": "设置",

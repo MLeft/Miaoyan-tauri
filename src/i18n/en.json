@@ -35,7 +35,8 @@
     "toc": "Table of Contents",
     "presentation": "Presentation",
     "settings": "Settings",
-    "export": "Export"
+    "export": "Export",
+    "format": "Format"
   },
   "settings": {
     "title": "Settings",
