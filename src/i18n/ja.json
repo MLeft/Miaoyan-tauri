@@ -34,7 +34,8 @@
     "view": "プレビュー",
     "settings": "設定",
     "export": "エクスポート",
-    "format": "整形"
+    "format": "整形",
+    "newNote": "新規ノート"
   },
   "settings": {
     "title": "設定",

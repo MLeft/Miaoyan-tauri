@@ -34,7 +34,8 @@
     "view": "預覽",
     "settings": "設定",
     "export": "匯出",
-    "format": "排版"
+    "format": "排版",
+    "newNote": "新建筆記"
   },
   "settings": {
     "title": "設定",

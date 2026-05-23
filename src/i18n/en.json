@@ -36,7 +36,8 @@
     "presentation": "Presentation",
     "settings": "Settings",
     "export": "Export",
-    "format": "Format"
+    "format": "Format",
+    "newNote": "New Note"
   },
   "settings": {
     "title": "Settings",

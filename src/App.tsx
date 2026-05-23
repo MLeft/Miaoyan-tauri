@@ -11,6 +11,7 @@ import { ExportMenu } from './components/shared/ExportMenu';
 import { Toast } from './components/shared/Toast';
 import { CombinedSidebar } from './components/sidebar/CombinedSidebar';
 import { formatMarkdown } from './services/formatter';
+import { createNote } from './services/tauri-bridge';
 import { useNotesStore } from './stores/notes-store';
 import { useSettingsStore } from './stores/settings-store';
 import { useEditorStore } from './stores/editor-store';
@@ -50,6 +51,15 @@ const IconSearch = () => (
 const IconFormat = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 20 20" fill="currentColor">
     <path d="M15.668 3.516A2.33 2.33 0 0 1 18 5.848v8.333a2.333 2.333 0 0 1-2.332 2.332h-.833a.666.666 0 0 1 0-1.33h.833c.553 0 1.002-.45 1.002-1.002V5.848c0-.554-.449-1.002-1.002-1.002h-.833a.665.665 0 0 1 0-1.33zM5.299 3.516a.665.665 0 0 1 0 1.302l-.134.014h-.833c-.553 0-1.002.449-1.002 1.002v8.333c0 .553.449 1.002 1.002 1.002h.833l.134.014a.665.665 0 0 1 0 1.302l-.134.014h-.833A2.333 2.333 0 0 1 2 14.167V5.834a2.33 2.33 0 0 1 2.332-2.332h.833zM7.083 9.752c.367 0 .665.298.665.665V12a.665.665 0 0 1-1.33 0v-1.583c0-.367.298-.665.665-.665M10 7.335c.367 0 .665.298.665.665v4a.665.665 0 0 1-1.33 0V8c0-.367.298-.665.665-.665M12.916 8.918c.367 0 .665.298.665.665V12a.665.665 0 0 1-1.33 0V9.583c0-.367.298-.665.665-.665"/>
+  </svg>
+);
+
+const IconNewNote = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="12" y1="11" x2="12" y2="17" />
+    <line x1="9" y1="14" x2="15" y2="14" />
   </svg>
 );
 
@@ -111,12 +121,13 @@ function ToolbarButton({ onClick, active, title, children }: {
   );
 }
 
-function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExport, onFormat }: {
+function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExport, onFormat, onNewNote }: {
   onOpenSettings: () => void;
   onTogglePresentation: () => void;
   onToggleExport: () => void;
   showExport: boolean;
   onFormat: () => void;
+  onNewNote: () => void;
 }) {
   const { t } = useTranslation();
   const { config } = useSettingsStore();
@@ -137,7 +148,18 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
       <div className="flex-1" data-tauri-drag-region />
 
       {/* Right - all buttons, right-aligned */}
+      {/* Order mirrors original MiaoYan: List → Format → Split → Preview → Presentation */}
       <div className="flex items-center gap-0.5 px-2 flex-shrink-0">
+        <ToolbarButton onClick={toggleSidebar} active={config.show_sidebar} title={`${t('toolbar.toggleSidebar')} (Cmd+1)`}>
+          <IconSidebar />
+        </ToolbarButton>
+        <span className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border)' }} />
+        <ToolbarButton onClick={onNewNote} title={`${t('toolbar.newNote')} (Cmd+N)`}>
+          <IconNewNote />
+        </ToolbarButton>
+        <ToolbarButton onClick={onFormat} title={`${t('toolbar.format')} (Cmd+Shift+L)`}>
+          <IconFormat />
+        </ToolbarButton>
         <ToolbarButton onClick={() => setViewMode('editor')} active={viewMode === 'editor'} title={`${t('toolbar.edit')} (Cmd+\\)`}>
           <IconEditor />
         </ToolbarButton>
@@ -159,14 +181,6 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
         </ToolbarButton>
         <ToolbarButton onClick={onOpenSettings} title={`${t('toolbar.settings')} (Cmd+,)`}>
           <IconSettings />
-        </ToolbarButton>
-        <span className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border)' }} />
-        <ToolbarButton onClick={toggleSidebar} active={config.show_sidebar} title={`${t('toolbar.toggleSidebar')} (Cmd+1)`}>
-          <IconSidebar />
-        </ToolbarButton>
-        <span className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border)' }} />
-        <ToolbarButton onClick={onFormat} title={`${t('toolbar.format')} (Cmd+Shift+L)`}>
-          <IconFormat />
         </ToolbarButton>
       </div>
     </div>
@@ -250,8 +264,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
 
-  const handleFormat = async () => {
-    const content = useNotesStore.getState().activeContent;
+  const handleFormat = async () => {    const content = useNotesStore.getState().activeContent;
     if (!content) return;
     try {
       const formatted = await formatMarkdown(content);
@@ -267,6 +280,18 @@ export default function App() {
     } catch (err) {
       console.error('Format failed:', err);
     }
+  };
+
+  const handleNewNote = async () => {
+    const { activeFolder, refreshNotes, selectNote } = useNotesStore.getState();
+    const storagePath = useSettingsStore.getState().config.storage_path;
+    const folder = activeFolder || storagePath;
+    if (!folder) return;
+    try {
+      const note = await createNote(folder, `Untitled-${Date.now()}`);
+      await refreshNotes(storagePath);
+      await selectNote(note);
+    } catch (e) { console.error('Failed to create note:', e); }
   };
 
   useEffect(() => { loadConfig(); }, []);
@@ -313,6 +338,7 @@ export default function App() {
     const handler = async (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === '1') { e.preventDefault(); useSettingsStore.getState().updateConfig({ show_sidebar: !useSettingsStore.getState().config.show_sidebar }); }
+      if (mod && e.key === 'n' && !e.shiftKey) { e.preventDefault(); handleNewNote(); }
       if (mod && e.key === '3') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); setViewMode(viewMode === 'preview' ? 'split' : 'preview'); }
       if (mod && e.key === '4') { e.preventDefault(); setShowPresentation(p => !p); }
       if (mod && e.key === '\\') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); const modes: ViewMode[] = ['editor', 'split', 'preview']; const idx = modes.indexOf(viewMode); setViewMode(modes[(idx + 1) % modes.length]); }
@@ -347,6 +373,7 @@ export default function App() {
         onToggleExport={() => setShowExport(p => !p)}
         showExport={showExport}
         onFormat={handleFormat}
+        onNewNote={handleNewNote}
       />
       <div className="flex-1 overflow-hidden relative">
         <Allotment>
@@ -367,3 +394,4 @@ export default function App() {
     </div>
   );
 }
+

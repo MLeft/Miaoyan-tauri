@@ -36,7 +36,8 @@
     "presentation": "演示",
     "settings": "设置",
     "export": "导出",
-    "format": "排版"
+    "format": "排版",
+    "newNote": "新建笔记"
   },
   "settings": {
     "title": "设置",
