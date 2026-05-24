@@ -17,19 +17,23 @@
   --accent-light: rgba(28, 93, 51, 0.12);
   --accent-icon: #1C5D33;
 
-  /* Backgrounds */
+  /* System blue (macOS controlAccentColor for settings/standard UI) */
+  --system-blue: #007AFF;
+  --system-blue-hover: #0066D6;
+
+  /* Backgrounds - matching macOS windowBackgroundColor & contentBackground */
   --bg-primary: #F5F5F5;
   --bg-secondary: #FFFFFF;
   --bg-tertiary: #EBEBEB;
   --bg-sidebar: #F5F5F5;
 
-  /* Text */
+  /* Text - matching labelColor / secondaryLabelColor */
   --text-primary: #262626;
   --text-secondary: #777777;
   --text-tertiary: #999999;
   --text-inverse: #FFFFFF;
 
-  /* Borders & dividers */
+  /* Borders & dividers - matching separatorColor */
   --border: #E0E0E0;
   --border-light: #EBEBEB;
 
@@ -39,8 +43,9 @@
   /* Links */
   --link: #05A69A;
 
-  /* Selection */
-  --selection-bg: #D9D9D9;
+  /* Selection - matching sidebarSelectionBackgroundColor */
+  --selection-bg: #CCCCCC;
+  --selection-active: #424A54;
 
   /* Toolbar */
   --toolbar-icon: #282828;
@@ -50,12 +55,30 @@
   /* Pin */
   --pin-color: #FFC837;
 
+  /* Semantic colors */
+  --success-color: #34C759;
+  --success-bg: rgba(52, 199, 89, 0.12);
+  --success-border: rgba(52, 199, 89, 0.3);
+  --danger-color: #FF3B30;
+  --danger-bg: rgba(255, 59, 48, 0.1);
+  --danger-border: rgba(255, 59, 48, 0.25);
+  --warning-color: #FF9500;
+
+  /* Toast - matching original toastBackgroundColor rgba(0.1, 0.1, 0.1, 0.95) */
+  --toast-bg: rgba(25, 25, 25, 0.95);
+  --toast-text: #FFFFFF;
+
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.25);
+
+  /* Fonts */
+  --font-sans: 'TsangerJinKai02', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-code: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', monospace;
 
   /* Font - TsangerJinKai02 as primary, system fonts as fallback */
-  font-family: 'TsangerJinKai02', -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-primary);
@@ -72,6 +95,10 @@
   --accent-hover: #48B08C;
   --accent-light: rgba(84, 197, 159, 0.15);
   --accent-icon: #54C59F;
+
+  /* System blue */
+  --system-blue: #0A84FF;
+  --system-blue-hover: #409CFF;
 
   /* Backgrounds - matching original #232832 */
   --bg-primary: #232832;
@@ -95,8 +122,9 @@
   /* Links */
   --link: #61FFC9;
 
-  /* Selection */
-  --selection-bg: #343A43;
+  /* Selection - matching sidebarSelectionBackgroundColor dark */
+  --selection-bg: #424A54;
+  --selection-active: #424A54;
 
   /* Toolbar */
   --toolbar-icon: #FFFFFF;
@@ -105,6 +133,24 @@
 
   /* Pin */
   --pin-color: #FFC837;
+
+  /* Semantic colors */
+  --success-color: #30D158;
+  --success-bg: rgba(48, 209, 88, 0.15);
+  --success-border: rgba(48, 209, 88, 0.35);
+  --danger-color: #FF453A;
+  --danger-bg: rgba(255, 69, 58, 0.12);
+  --danger-border: rgba(255, 69, 58, 0.3);
+  --warning-color: #FFD60A;
+
+  /* Toast */
+  --toast-bg: rgba(25, 25, 25, 0.95);
+  --toast-text: #FFFFFF;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.5);
 
   color: var(--text-primary);
   background-color: var(--bg-primary);
@@ -160,6 +206,79 @@ html, body, #root {
 /* Allotment sash - match original 1px divider */
 .sash-container .sash {
   background: transparent !important;
+}
+
+/* ── Transition utilities ── */
+.sidebar-transition {
+  transition: width 150ms ease;
+}
+
+.panel-transition {
+  transition: opacity 150ms ease;
+}
+
+.btn-hover-transition {
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.dialog-enter {
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+/* ── Dialog animation ── */
+.dialog-overlay {
+  animation: fadeIn 150ms ease forwards;
+}
+
+.dialog-content {
+  animation: scaleIn 150ms ease forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ── Code font ── */
+code, pre, .font-code {
+  font-family: var(--font-code);
+}
+
+/* ── Empty state ── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.empty-state-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+  opacity: 0.4;
+}
+
+.empty-state-text {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Image preview tooltip */
+.image-preview-tooltip {
+  padding: 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
 }
 
 .sash-container .sash:hover {

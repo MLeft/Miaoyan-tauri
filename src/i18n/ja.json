@@ -21,7 +21,8 @@
   "sort": {
     "modified": "更新日時",
     "created": "作成日時",
-    "title": "タイトル"
+    "title": "タイトル",
+    "custom": "カスタム"
   },
   "editor": {
     "selectNote": "ノートを選択するか、新しいノートを作成してください"
@@ -69,7 +70,20 @@
     "yes": "はい",
     "no": "いいえ",
     "quickLaunch": "クイック起動",
-    "clear": "クリア"
+    "clear": "クリア",
+    "lineEnding": "改行コード",
+    "lineEndingLF": "MiaoYan モード",
+    "lineEndingCRLF": "GitHub モード",
+    "lineSpacing": "行間",
+    "letterSpacing": "文字間隔",
+    "previewWidth": "プレビュー幅",
+    "previewWidthFull": "全幅",
+    "typography": "タイポグラフィ",
+    "titleFontSize": "タイトルフォントサイズ",
+    "presentationFontSize": "プレゼンテーションフォントサイズ",
+    "lineHeight": "行の高さ",
+    "imageUploadService": "画像アップロードサービス",
+    "imageUploadNone": "なし（ローカル保存）"
   },
   "contextMenu": {
     "pin": "ピン留め",
@@ -77,17 +91,32 @@
     "rename": "名前変更",
     "delete": "削除",
     "openInFinder": "ファイルマネージャで表示",
-    "duplicate": "複製"
+    "duplicate": "複製",
+    "bold": "太字",
+    "italic": "斜体",
+    "strikethrough": "取り消し線",
+    "inlineCode": "インラインコード",
+    "unorderedList": "箇条書き",
+    "orderedList": "番号付きリスト",
+    "todo": "ToDo",
+    "link": "リンク",
+    "image": "画像",
+    "codeBlock": "コードブロック"
   },
   "export": {
-    "pdf": "PDFとしてエクスポート",
-    "html": "HTMLとしてエクスポート",
-    "image": "画像としてエクスポート"
+    "pdf": "PDF",
+    "html": "HTML",
+    "image": "画像 (PNG)",
+    "markdown": "Markdown"
   },
   "version": {
     "title": "バージョン履歴",
     "restore": "このバージョンを復元",
     "noVersions": "バージョン履歴なし"
+  },
+  "backlinks": {
+    "title": "バックリンク",
+    "empty": "バックリンクなし"
   },
   "shortcuts": {
     "newNote": "新規ノート",
@@ -106,5 +135,36 @@
     "codeBlock": "コードブロック",
     "format": "ドキュメント整形",
     "export": "エクスポート"
+  },
+  "update": {
+    "title": "アップデートが利用可能",
+    "current": "現在のバージョン：",
+    "new": "新バージョン：",
+    "changelog": "変更ログ",
+    "install": "今すぐインストール",
+    "later": "後で",
+    "skip": "このバージョンをスキップ",
+    "downloading": "ダウンロード中...",
+    "ready": "インストール準備完了"
+  },
+  "sync": {
+    "icloudAvailable": "iCloud 同期利用可能",
+    "useIcloud": "iCloud Drive を使用",
+    "synced": "同期済み",
+    "syncing": "同期中...",
+    "unavailable": "同期不可",
+    "hint": "クラウドフォルダをストレージパスに設定すると同期が有効になります"
+  },
+  "encryption": {
+    "unlock": "ノートをアンロック",
+    "encrypt": "ノートを暗号化",
+    "removeEncryption": "暗号化を解除",
+    "password": "パスワード",
+    "confirmPassword": "パスワードの確認",
+    "warning": "警告：パスワードを失った場合、内容は復元できません",
+    "wrongPassword": "パスワードが正しくありません",
+    "success": "暗号化が適用されました",
+    "removed": "暗号化が解除されました",
+    "mismatch": "パスワードが一致しません"
   }
 }

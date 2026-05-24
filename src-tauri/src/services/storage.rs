@@ -65,7 +65,7 @@ pub fn scan_notes(root_path: &Path) -> Vec<NoteMetadata> {
             .to_string_lossy()
             .to_lowercase();
         
-        if ext != "md" && ext != "markdown" && ext != "txt" {
+        if ext != "md" && ext != "markdown" && ext != "txt" && !is_encrypted_file(path) {
             continue;
         }
 
@@ -102,7 +102,7 @@ pub fn scan_notes_in_folder(folder_path: &Path, root_path: &Path) -> Vec<NoteMet
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_lowercase();
-                if ext != "md" && ext != "markdown" && ext != "txt" {
+                if ext != "md" && ext != "markdown" && ext != "txt" && !is_encrypted_file(&path) {
                     continue;
                 }
                 if let Some(name) = path.file_name() {
@@ -124,10 +124,19 @@ pub fn scan_notes_in_folder(folder_path: &Path, root_path: &Path) -> Vec<NoteMet
 
 fn build_note_metadata(path: &Path, root_path: &Path) -> Option<NoteMetadata> {
     let metadata = fs::metadata(path).ok()?;
-    let title = path.file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    let encrypted = is_encrypted_file(path);
+    // For encrypted files (.md.encrypted), strip both suffixes to get the title
+    let title = if encrypted {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        name.trim_end_matches(".encrypted")
+            .trim_end_matches(".md")
+            .to_string()
+    } else {
+        path.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    };
     
     let folder = path.parent()
         .map(|p| {
@@ -156,7 +165,13 @@ fn build_note_metadata(path: &Path, root_path: &Path) -> Option<NoteMetadata> {
         modified_at,
         pinned: false,
         size: metadata.len(),
+        is_encrypted: encrypted,
     })
+}
+
+/// Check if path is an encrypted note (.md.encrypted)
+fn is_encrypted_file(path: &Path) -> bool {
+    path.to_string_lossy().ends_with(".md.encrypted")
 }
 
 pub fn get_config_dir() -> PathBuf {

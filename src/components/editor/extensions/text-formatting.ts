@@ -1,7 +1,7 @@
 import { EditorView, KeyBinding } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 
-function wrapSelection(view: EditorView, before: string, after: string): boolean {
+export function wrapSelection(view: EditorView, before: string, after: string): boolean {
   const { from, to } = view.state.selection.main;
   const selected = view.state.sliceDoc(from, to);
 
@@ -41,6 +41,133 @@ function insertAtLineStart(view: EditorView, prefix: string): boolean {
   return true;
 }
 
+/** Toggle unordered list prefix "- " on all selected lines */
+export function toggleUnorderedList(view: EditorView): boolean {
+  const { from, to } = view.state.selection.main;
+  const firstLine = view.state.doc.lineAt(from);
+  const lastLine = view.state.doc.lineAt(to);
+
+  // Determine whether ALL lines already have "- " prefix
+  let allHavePrefix = true;
+  for (let lineNo = firstLine.number; lineNo <= lastLine.number; lineNo++) {
+    const line = view.state.doc.line(lineNo);
+    if (!line.text.startsWith('- ')) { allHavePrefix = false; break; }
+  }
+
+  const changes: { from: number; to: number; insert: string }[] = [];
+  for (let lineNo = firstLine.number; lineNo <= lastLine.number; lineNo++) {
+    const line = view.state.doc.line(lineNo);
+    if (allHavePrefix) {
+      // Remove "- "
+      changes.push({ from: line.from, to: line.from + 2, insert: '' });
+    } else if (!line.text.startsWith('- ')) {
+      // Add "- "
+      changes.push({ from: line.from, to: line.from, insert: '- ' });
+    }
+  }
+  if (changes.length) view.dispatch({ changes });
+  return true;
+}
+
+/** Toggle ordered list prefixes "1. ", "2. " ... on all selected lines */
+export function toggleOrderedList(view: EditorView): boolean {
+  const { from, to } = view.state.selection.main;
+  const firstLine = view.state.doc.lineAt(from);
+  const lastLine = view.state.doc.lineAt(to);
+
+  const orderedRe = /^\d+\.\s/;
+
+  // Determine whether ALL lines already have a numbered prefix
+  let allHavePrefix = true;
+  for (let lineNo = firstLine.number; lineNo <= lastLine.number; lineNo++) {
+    const line = view.state.doc.line(lineNo);
+    if (!orderedRe.test(line.text)) { allHavePrefix = false; break; }
+  }
+
+  const changes: { from: number; to: number; insert: string }[] = [];
+  let counter = 1;
+  for (let lineNo = firstLine.number; lineNo <= lastLine.number; lineNo++) {
+    const line = view.state.doc.line(lineNo);
+    if (allHavePrefix) {
+      // Remove existing "N. "
+      const match = line.text.match(/^(\d+\.\s)/);
+      if (match) changes.push({ from: line.from, to: line.from + match[1].length, insert: '' });
+    } else if (!orderedRe.test(line.text)) {
+      changes.push({ from: line.from, to: line.from, insert: `${counter}. ` });
+    }
+    counter++;
+  }
+  if (changes.length) view.dispatch({ changes });
+  return true;
+}
+
+/** Toggle todo list prefix "- [ ] " on all selected lines */
+export function toggleTodoList(view: EditorView): boolean {
+  const { from, to } = view.state.selection.main;
+  const firstLine = view.state.doc.lineAt(from);
+  const lastLine = view.state.doc.lineAt(to);
+
+  // Determine whether ALL lines already have "- [ ] " or "- [x] " prefix
+  let allHavePrefix = true;
+  for (let lineNo = firstLine.number; lineNo <= lastLine.number; lineNo++) {
+    const line = view.state.doc.line(lineNo);
+    if (!line.text.match(/^- \[[ x]\] /)) { allHavePrefix = false; break; }
+  }
+
+  const changes: { from: number; to: number; insert: string }[] = [];
+  for (let lineNo = firstLine.number; lineNo <= lastLine.number; lineNo++) {
+    const line = view.state.doc.line(lineNo);
+    if (allHavePrefix) {
+      // Remove "- [ ] " or "- [x] "
+      changes.push({ from: line.from, to: line.from + 6, insert: '' });
+    } else if (!line.text.match(/^- \[[ x]\] /)) {
+      // Add "- [ ] ", replacing existing "- " if present
+      if (line.text.startsWith('- ')) {
+        changes.push({ from: line.from, to: line.from + 2, insert: '- [ ] ' });
+      } else {
+        changes.push({ from: line.from, to: line.from, insert: '- [ ] ' });
+      }
+    }
+  }
+  if (changes.length) view.dispatch({ changes });
+  return true;
+}
+
+export function insertLink(view: EditorView): boolean {
+  const { from, to } = view.state.selection.main;
+  const selected = view.state.sliceDoc(from, to);
+  const insert = selected ? `[${selected}](url)` : '[text](url)';
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + 1, head: from + 1 + (selected || 'text').length },
+  });
+  return true;
+}
+
+export function insertImage(view: EditorView): boolean {
+  const { from, to } = view.state.selection.main;
+  const selected = view.state.sliceDoc(from, to);
+  const insert = selected ? `![${selected}](url)` : '![alt](url)';
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + 2, head: from + 2 + (selected || 'alt').length },
+  });
+  return true;
+}
+
+export function insertCodeBlock(view: EditorView): boolean {
+  const { from, to } = view.state.selection.main;
+  const selected = view.state.sliceDoc(from, to);
+  const insert = selected
+    ? '```\n' + selected + '\n```'
+    : '```\n\n```';
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: selected ? from + 4 : from + 4 },
+  });
+  return true;
+}
+
 const boldBinding: KeyBinding = {
   key: 'Mod-b',
   run(view) { return wrapSelection(view, '**', '**'); },
@@ -51,9 +178,22 @@ const italicBinding: KeyBinding = {
   run(view) { return wrapSelection(view, '*', '*'); },
 };
 
-const underlineBinding: KeyBinding = {
+/** Cmd+U → toggle unordered list (original MiaoYan behaviour) */
+const unorderedListBinding: KeyBinding = {
   key: 'Mod-u',
-  run(view) { return wrapSelection(view, '<u>', '</u>'); },
+  run(view) { return toggleUnorderedList(view); },
+};
+
+/** Cmd+Shift+O → toggle ordered list */
+const orderedListBinding: KeyBinding = {
+  key: 'Mod-Shift-o',
+  run(view) { return toggleOrderedList(view); },
+};
+
+/** Cmd+T → toggle todo list */
+const todoListBinding: KeyBinding = {
+  key: 'Mod-t',
+  run(view) { return toggleTodoList(view); },
 };
 
 const strikethroughBinding: KeyBinding = {
@@ -63,33 +203,12 @@ const strikethroughBinding: KeyBinding = {
 
 const linkBinding: KeyBinding = {
   key: 'Mod-k',
-  run(view) {
-    const { from, to } = view.state.selection.main;
-    const selected = view.state.sliceDoc(from, to);
-    const insert = selected ? `[${selected}](url)` : '[text](url)';
-    view.dispatch({
-      changes: { from, to, insert },
-      selection: { anchor: from + 1, head: from + 1 + (selected || 'text').length },
-    });
-    return true;
-  },
+  run(view) { return insertLink(view); },
 };
 
 const codeBlockBinding: KeyBinding = {
   key: 'Mod-Shift-c',
-  run(view) {
-    const { from, to } = view.state.selection.main;
-    const selected = view.state.sliceDoc(from, to);
-    const insert = selected
-      ? '```\n' + selected + '\n```'
-      : '```\n\n```';
-    const cursorPos = selected ? from + 4 + selected.length + 4 : from + 4;
-    view.dispatch({
-      changes: { from, to, insert },
-      selection: { anchor: selected ? from + 4 : from + 4 },
-    });
-    return true;
-  },
+  run(view) { return insertCodeBlock(view); },
 };
 
 const inlineCodeBinding: KeyBinding = {
@@ -100,7 +219,9 @@ const inlineCodeBinding: KeyBinding = {
 export const textFormattingKeymap: KeyBinding[] = [
   boldBinding,
   italicBinding,
-  underlineBinding,
+  unorderedListBinding,
+  orderedListBinding,
+  todoListBinding,
   strikethroughBinding,
   linkBinding,
   codeBlockBinding,

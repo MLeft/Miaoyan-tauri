@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { EditorState, Compartment } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -10,13 +10,16 @@ import { useNotesStore } from '../../stores/notes-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import { useEditorStore } from '../../stores/editor-store';
 import { smartListKeymap } from './extensions/smart-lists';
-import { textFormattingKeymap } from './extensions/text-formatting';
+import { textFormattingKeymap, wrapSelection, toggleUnorderedList, toggleOrderedList, toggleTodoList, insertLink, insertImage, insertCodeBlock } from './extensions/text-formatting';
 import { tabSnippets } from './extensions/tab-snippets';
 import { wikilinks } from './extensions/wikilink';
+import { imagePasteExtension } from './extensions/image-paste';
+import { imagePreviewExtension } from './extensions/image-preview';
+import { ContextMenu } from './ContextMenu';
 
 const themeCompartment = new Compartment();
 
-function getEditorTheme(isDark: boolean) {
+function getEditorTheme(isDark: boolean, config: { line_height: number; line_spacing: number; letter_spacing: number }) {
   return EditorView.theme({
     '&': {
       height: '100%',
@@ -28,11 +31,12 @@ function getEditorTheme(isDark: boolean) {
       fontFamily: "'TsangerJinKai02', -apple-system, BlinkMacSystemFont, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", sans-serif",
       padding: '16px 0',
       caretColor: isDark ? '#E8E8EB' : '#262626',
-      letterSpacing: '0.5px',
+      letterSpacing: `${config.letter_spacing}px`,
     },
     '.cm-line': {
       padding: '0 20px',
-      lineHeight: '1.45',
+      lineHeight: String(config.line_height),
+      marginBottom: `${config.line_spacing}px`,
     },
     '.cm-gutters': {
       backgroundColor: 'transparent',
@@ -95,6 +99,7 @@ export function Editor() {
   // Suppress editor→preview sync while preview is driving editor scroll
   const suppressEditorSync = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
 
   const isDark = config.theme === 'dark' ||
     (config.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -117,6 +122,8 @@ export function Editor() {
         markdown({ base: markdownLanguage, codeLanguages: languages }),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         wikilinks(),
+        imagePasteExtension(() => activeNote?.path ?? null),
+        imagePreviewExtension(() => activeNote?.path ?? null),
         keymap.of([
           ...smartListKeymap,
           ...textFormattingKeymap,
@@ -125,7 +132,7 @@ export function Editor() {
           ...searchKeymap,
           indentWithTab,
         ]),
-        themeCompartment.of(getEditorTheme(isDark)),
+        themeCompartment.of(getEditorTheme(isDark, { line_height: config.line_height, line_spacing: config.line_spacing, letter_spacing: config.letter_spacing })),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -171,14 +178,14 @@ export function Editor() {
     }
   }, [activeContent]);
 
-  // Update theme
+  // Update theme & spacing
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: themeCompartment.reconfigure(getEditorTheme(isDark)),
+      effects: themeCompartment.reconfigure(getEditorTheme(isDark, { line_height: config.line_height, line_spacing: config.line_spacing, letter_spacing: config.letter_spacing })),
     });
-  }, [isDark]);
+  }, [isDark, config.line_height, config.line_spacing, config.letter_spacing]);
 
   // TOC → Editor scroll
   useEffect(() => {
@@ -216,18 +223,54 @@ export function Editor() {
     return () => window.removeEventListener('preview-scroll-to-line', handler);
   }, []);
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, visible: true });
+  };
+
+  const handleCloseContextMenu = () => {
+    setContextMenu(prev => ({ ...prev, visible: false }));
+  };
+
+  const handleContextMenuAction = (action: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+
+    switch (action) {
+      case 'bold': wrapSelection(view, '**', '**'); break;
+      case 'italic': wrapSelection(view, '*', '*'); break;
+      case 'strikethrough': wrapSelection(view, '~~', '~~'); break;
+      case 'inlineCode': wrapSelection(view, '`', '`'); break;
+      case 'unorderedList': toggleUnorderedList(view); break;
+      case 'orderedList': toggleOrderedList(view); break;
+      case 'todo': toggleTodoList(view); break;
+      case 'link': insertLink(view); break;
+      case 'image': insertImage(view); break;
+      case 'codeBlock': insertCodeBlock(view); break;
+    }
+  };
+
   if (!activeNote) {
     return (
-      <div className="h-full flex items-center justify-center" style={{ backgroundColor: isDark ? '#232832' : '#FFFFFF' }}>
+      <div className="h-full flex items-center justify-center empty-state" style={{ backgroundColor: 'var(--bg-secondary)' }}>
         <div className="text-center">
-          <p className="text-4xl font-light" style={{ color: isDark ? '#E8E8EB' : '#262626' }}>MiaoYan</p>
-          <p className="text-sm mt-2" style={{ color: isDark ? '#6B737D' : '#999' }}>Select a note or create a new one</p>
+          <p className="text-4xl font-light" style={{ color: 'var(--text-primary)' }}>MiaoYan</p>
+          <p className="text-sm mt-2" style={{ color: 'var(--text-tertiary)' }}>Select a note or create a new one</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full overflow-hidden" ref={editorRef} />
+    <div className="h-full overflow-hidden relative" onContextMenu={handleContextMenu}>
+      <div className="h-full" ref={editorRef} />
+      <ContextMenu
+        x={contextMenu.x}
+        y={contextMenu.y}
+        visible={contextMenu.visible}
+        onClose={handleCloseContextMenu}
+        onAction={handleContextMenuAction}
+      />
+    </div>
   );
 }

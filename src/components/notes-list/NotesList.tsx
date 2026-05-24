@@ -214,7 +214,7 @@ export function NotesList() {
           {showSortMenu && (
             <div className="absolute right-0 top-full mt-1 z-50 border rounded shadow-lg py-1 min-w-[120px]"
               style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
-              {(['modified', 'created', 'title'] as SortMode[]).map((mode) => (
+              {(['modified', 'created', 'title', 'custom'] as SortMode[]).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => handleSortChange(mode)}

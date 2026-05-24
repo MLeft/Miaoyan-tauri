@@ -1,0 +1,24 @@
+#!/bin/bash
+# MiaoYan CLI - 通过 deep link 与应用交互
+
+case "$1" in
+  open)
+    open "miaoyan://open?title=$(echo "$2" | jq -sRr @uri)"
+    ;;
+  new)
+    TITLE="${2:-Untitled}"
+    CONTENT="${3:-}"
+    open "miaoyan://new?title=$(echo "$TITLE" | jq -sRr @uri)&content=$(echo "$CONTENT" | jq -sRr @uri)"
+    ;;
+  search)
+    open "miaoyan://search?q=$(echo "$2" | jq -sRr @uri)"
+    ;;
+  *)
+    echo "Usage: miaoyan <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  open <title>           Open a note by title"
+    echo "  new <title> [content]  Create a new note"
+    echo "  search <query>         Search notes"
+    ;;
+esac

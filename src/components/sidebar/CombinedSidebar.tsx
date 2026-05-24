@@ -4,8 +4,34 @@ import { useNotesStore } from '../../stores/notes-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import { createNote, deleteNote, renameNote, togglePin, createFolder } from '../../services/tauri-bridge';
 import { useTranslation } from 'react-i18next';
+import { SyncStatusIndicator } from '../shared/SyncStatus';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  DragOverlay,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { EncryptionDialog } from '../shared/EncryptionDialog';
 
 /* SVG icons */
+const IconLockSmall = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+  </svg>
+);
+
 const IconHome = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" />
@@ -42,6 +68,111 @@ const IconSearch = () => (
   </svg>
 );
 
+/* Sortable Note Item */
+interface SortableNoteItemProps {
+  note: NoteMetadata;
+  isActive: boolean;
+  showFolder: boolean;
+  isRenaming: boolean;
+  renameValue: string;
+  onRenameValueChange: (v: string) => void;
+  onRenameSubmit: () => void;
+  onRenameCancel: () => void;
+  onSelect: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  formatDate: (dateStr: string) => string;
+}
+
+function SortableNoteItem({
+  note, isActive, showFolder, isRenaming, renameValue,
+  onRenameValueChange, onRenameSubmit, onRenameCancel,
+  onSelect, onContextMenu, formatDate,
+}: SortableNoteItemProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: note.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    minHeight: '52px',
+    padding: '8px 12px',
+    borderRadius: '6px',
+    backgroundColor: isActive ? 'var(--accent-light)' : 'transparent',
+    opacity: isDragging ? 0.5 : 1,
+    cursor: isDragging ? 'grabbing' : 'pointer',
+    position: 'relative' as const,
+    zIndex: isDragging ? 50 : 'auto' as unknown as number,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="transition-colors"
+      onClick={onSelect}
+      onContextMenu={onContextMenu}
+      {...attributes}
+      {...listeners}
+    >
+      <div className="flex items-center gap-1">
+        {note.pinned && <span className="text-[10px]" style={{ color: 'var(--pin-color)' }}>&#9733;</span>}
+        {note.is_encrypted && <span style={{ color: 'var(--text-tertiary)', opacity: 0.7 }}><IconLockSmall /></span>}
+        {isRenaming ? (
+          <input
+            autoFocus value={renameValue}
+            onChange={(e) => onRenameValueChange(e.target.value)}
+            onBlur={onRenameSubmit}
+            onKeyDown={(e) => { if (e.key === 'Enter') onRenameSubmit(); if (e.key === 'Escape') onRenameCancel(); }}
+            className="flex-1 px-1 py-0 text-xs font-medium rounded outline-none"
+            style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--accent)' }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+            {note.title}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5 mt-0.5">
+        <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{formatDate(note.modified_at)}</span>
+        {showFolder && note.folder && <span className="text-[11px] truncate" style={{ color: 'var(--text-tertiary)' }}>{note.folder}</span>}
+      </div>
+    </div>
+  );
+}
+
+/* Drag overlay for the item being dragged */
+function DragOverlayNoteItem({ note, formatDate }: { note: NoteMetadata; formatDate: (d: string) => string }) {
+  return (
+    <div
+      style={{
+        minHeight: '52px',
+        padding: '8px 12px',
+        backgroundColor: 'var(--bg-secondary)',
+        borderRadius: '6px',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+        transform: 'scale(1.02)',
+        transition: 'transform 150ms ease',
+        cursor: 'grabbing',
+      }}
+    >
+      <div className="flex items-center gap-1">
+        {note.pinned && <span className="text-[10px]" style={{ color: 'var(--pin-color)' }}>&#9733;</span>}
+        <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{note.title}</span>
+      </div>
+      <div className="flex items-center gap-1.5 mt-0.5">
+        <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{formatDate(note.modified_at)}</span>
+      </div>
+    </div>
+  );
+}
+
 export function CombinedSidebar() {
   const { t } = useTranslation();
   const {
@@ -49,6 +180,8 @@ export function CombinedSidebar() {
     selectNote, searchQuery, setSearchQuery,
     sortMode, sortDirection, setSortMode, toggleSortDirection,
     isLoading, refreshNotes, setActiveFolder, loadProjects,
+    customSortOrder, loadCustomSortOrder, applyCustomSortOrder,
+    encryptionDialog, setEncryptionDialog, onNoteUnlocked,
   } = useNotesStore();
   const { config } = useSettingsStore();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -56,12 +189,30 @@ export function CombinedSidebar() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const [dragActiveId, setDragActiveId] = useState<string | null>(null);
+
+  // DnD sensors (only active in custom sort mode)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   // Sort notes: pinned first, then by sort mode
   const sortedNotes = useMemo(() => {
     const sorted = [...notes].sort((a, b) => {
       if (a.pinned && !b.pinned) return -1;
       if (!a.pinned && b.pinned) return 1;
+
+      if (sortMode === 'custom') {
+        const orderA = customSortOrder.indexOf(a.id);
+        const orderB = customSortOrder.indexOf(b.id);
+        // Notes not in custom order go to the end
+        if (orderA === -1 && orderB === -1) return 0;
+        if (orderA === -1) return 1;
+        if (orderB === -1) return -1;
+        return orderA - orderB;
+      }
+
       let cmp = 0;
       switch (sortMode) {
         case 'modified': cmp = new Date(a.modified_at).getTime() - new Date(b.modified_at).getTime(); break;
@@ -71,7 +222,29 @@ export function CombinedSidebar() {
       return sortDirection === 'desc' ? -cmp : cmp;
     });
     return sorted;
-  }, [notes, sortMode, sortDirection]);
+  }, [notes, sortMode, sortDirection, customSortOrder]);
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    setDragActiveId(null);
+    if (!over || active.id === over.id) return;
+
+    const currentNotes = sortedNotes;
+    const oldIndex = currentNotes.findIndex((n) => n.id === active.id);
+    const newIndex = currentNotes.findIndex((n) => n.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    // Reorder
+    const reordered = [...currentNotes];
+    const [moved] = reordered.splice(oldIndex, 1);
+    reordered.splice(newIndex, 0, moved);
+
+    // Update notes array in store and persist
+    const noteIds = reordered.map((n) => n.id);
+    applyCustomSortOrder(config.storage_path, activeFolder, noteIds);
+    // Also update the notes array order in the store
+    useNotesStore.setState({ notes: reordered });
+  }, [sortedNotes, config.storage_path, activeFolder, applyCustomSortOrder]);
 
   const toggleFolderExpand = (path: string) => {
     setExpandedFolders((prev) => {
@@ -132,13 +305,26 @@ export function CombinedSidebar() {
     setRenamingId(null);
   };
 
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
-    if (diffDays === 0) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const handleEncryptNote = () => {
+    if (!contextMenu) return;
+    setEncryptionDialog({ visible: true, mode: 'encrypt', notePath: contextMenu.note.path });
+    setContextMenu(null);
+  };
+
+  const handleRemoveEncryption = () => {
+    if (!contextMenu) return;
+    setEncryptionDialog({ visible: true, mode: 'remove', notePath: contextMenu.note.path });
+    setContextMenu(null);
+  };
+
+  const formatNoteDate = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hour = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${year}/${month}/${day} ${hour}:${min}`;
   };
 
   // Close context menu on click outside
@@ -147,6 +333,25 @@ export function CombinedSidebar() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [contextMenu]);
+
+  // Global: focus search input via custom event (Cmd+F)
+  useEffect(() => {
+    const handler = () => { searchRef.current?.focus(); searchRef.current?.select(); };
+    window.addEventListener('sidebar-focus-search', handler);
+    return () => window.removeEventListener('sidebar-focus-search', handler);
+  }, []);
+
+  // Global: trigger rename on active note via custom event (Cmd+R)
+  useEffect(() => {
+    const handler = () => {
+      const activeNote = useNotesStore.getState().activeNote;
+      if (!activeNote) return;
+      setRenamingId(activeNote.id);
+      setRenameValue(activeNote.title);
+    };
+    window.addEventListener('sidebar-rename-note', handler);
+    return () => window.removeEventListener('sidebar-rename-note', handler);
+  }, []);
 
   const renderProject = (project: Project, depth = 0) => {
     const isExpanded = expandedFolders.has(project.path);
@@ -183,7 +388,7 @@ export function CombinedSidebar() {
   };
 
   return (
-    <div className="h-full flex flex-col border-r" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border)' }}>
+    <div className="h-full flex flex-col border-r sidebar-transition" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border)' }}>
       {/* Search + New */}
       <div className="px-2 pt-2 pb-1">
         <div className="flex items-center gap-1">
@@ -254,22 +459,26 @@ export function CombinedSidebar() {
       {/* Divider */}
       <div className="mx-3 my-1" style={{ borderTop: '1px solid var(--border-light)' }} />
 
-      {/* Sort indicator */}
-      <div className="px-3 py-1 flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
-          {notes.length} {t('notesList.notes')}
-        </span>
+      {/* Sort controls */}
+      <div className="px-3 py-0.5 flex items-center justify-end">
+        <SyncStatusIndicator compact />
         <button
           className="text-[10px] transition-colors"
           style={{ color: 'var(--text-tertiary)' }}
           onClick={() => {
-            const modes: SortMode[] = ['modified', 'created', 'title'];
+            const modes: SortMode[] = ['modified', 'created', 'title', 'custom'];
             const idx = modes.indexOf(sortMode);
-            if (sortDirection === 'desc') toggleSortDirection();
-            else { setSortMode(modes[(idx + 1) % modes.length]); }
+            const nextMode = modes[(idx + 1) % modes.length];
+            if (sortDirection === 'desc' && nextMode !== 'custom') toggleSortDirection();
+            else {
+              setSortMode(nextMode);
+              if (nextMode === 'custom') {
+                loadCustomSortOrder(config.storage_path, activeFolder);
+              }
+            }
           }}
         >
-          {sortMode === 'modified' ? t('sort.modified') : sortMode === 'created' ? t('sort.created') : t('sort.title')} {sortDirection === 'desc' ? '↓' : '↑'}
+          {sortMode === 'modified' ? t('sort.modified') : sortMode === 'created' ? t('sort.created') : sortMode === 'custom' ? t('sort.custom', 'Custom') : t('sort.title')} {sortMode !== 'custom' && (sortDirection === 'desc' ? '↓' : '↑')}
         </button>
       </div>
 
@@ -281,6 +490,41 @@ export function CombinedSidebar() {
           <div className="flex items-center justify-center h-20 text-xs" style={{ color: 'var(--text-tertiary)' }}>
             {searchQuery ? t('notesList.noResults') : t('notesList.empty')}
           </div>
+        ) : sortMode === 'custom' ? (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={({ active }) => setDragActiveId(active.id as string)}
+            onDragEnd={handleDragEnd}
+            onDragCancel={() => setDragActiveId(null)}
+          >
+            <SortableContext items={sortedNotes.map((n) => n.id)} strategy={verticalListSortingStrategy}>
+              {sortedNotes.map((note) => (
+                <SortableNoteItem
+                  key={note.id}
+                  note={note}
+                  isActive={activeNote?.id === note.id}
+                  showFolder={activeFolder === null}
+                  isRenaming={renamingId === note.id}
+                  renameValue={renameValue}
+                  onRenameValueChange={setRenameValue}
+                  onRenameSubmit={() => handleRenameSubmit(note)}
+                  onRenameCancel={() => setRenamingId(null)}
+                  onSelect={() => selectNote(note)}
+                  onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, note }); }}
+                  formatDate={formatNoteDate}
+                />
+              ))}
+            </SortableContext>
+            <DragOverlay>
+              {dragActiveId ? (
+                <DragOverlayNoteItem
+                  note={sortedNotes.find((n) => n.id === dragActiveId)!}
+                  formatDate={formatNoteDate}
+                />
+              ) : null}
+            </DragOverlay>
+          </DndContext>
         ) : (
           sortedNotes.map((note) => (
             <div
@@ -289,8 +533,8 @@ export function CombinedSidebar() {
               style={{
                 minHeight: '52px',
                 padding: '8px 12px',
+                borderRadius: '6px',
                 backgroundColor: activeNote?.id === note.id ? 'var(--accent-light)' : 'transparent',
-                borderLeft: activeNote?.id === note.id ? '2px solid var(--accent)' : '2px solid transparent',
               }}
               onClick={() => selectNote(note)}
               onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, note }); }}
@@ -299,6 +543,7 @@ export function CombinedSidebar() {
             >
               <div className="flex items-center gap-1">
                 {note.pinned && <span className="text-[10px]" style={{ color: 'var(--pin-color)' }}>&#9733;</span>}
+                {note.is_encrypted && <span style={{ color: 'var(--text-tertiary)', opacity: 0.7 }}><IconLockSmall /></span>}
                 {renamingId === note.id ? (
                   <input
                     autoFocus value={renameValue}
@@ -316,8 +561,8 @@ export function CombinedSidebar() {
                 )}
               </div>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{formatDate(note.modified_at)}</span>
-                {note.folder && <span className="text-[11px] truncate" style={{ color: 'var(--text-tertiary)', opacity: 0.7 }}>{note.folder}</span>}
+                <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{formatNoteDate(note.modified_at)}</span>
+                {activeFolder === null && note.folder && <span className="text-[11px] truncate" style={{ color: 'var(--text-tertiary)' }}>{note.folder}</span>}
               </div>
             </div>
           ))
@@ -327,7 +572,7 @@ export function CombinedSidebar() {
       {/* Context Menu */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] border rounded-lg shadow-lg py-1 min-w-[130px]"
+          className="fixed z-[9999] border rounded-lg shadow-lg py-1 min-w-[130px] dialog-content"
           style={{ left: contextMenu.x, top: contextMenu.y, backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
         >
           <button onClick={handlePin} className="w-full text-left px-3 py-1 text-xs transition-colors"
@@ -343,13 +588,44 @@ export function CombinedSidebar() {
             {t('contextMenu.rename')}
           </button>
           <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+          {contextMenu.note.is_encrypted ? (
+            <button onClick={handleRemoveEncryption} className="w-full text-left px-3 py-1 text-xs transition-colors"
+              style={{ color: 'var(--text-primary)' }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+              {t('encryption.removeEncryption')}
+            </button>
+          ) : (
+            <button onClick={handleEncryptNote} className="w-full text-left px-3 py-1 text-xs transition-colors"
+              style={{ color: 'var(--text-primary)' }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+              {t('encryption.encrypt')}
+            </button>
+          )}
+          <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
           <button onClick={handleDelete} className="w-full text-left px-3 py-1 text-xs transition-colors"
-            style={{ color: '#ef4444' }}
+            style={{ color: 'var(--danger-color)' }}
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
             {t('contextMenu.delete')}
           </button>
         </div>
+      )}
+
+      {/* Encryption Dialog */}
+      {encryptionDialog && (
+        <EncryptionDialog
+          mode={encryptionDialog.mode}
+          notePath={encryptionDialog.notePath}
+          visible={encryptionDialog.visible}
+          onClose={() => setEncryptionDialog(null)}
+          onUnlocked={(content, password) => {
+            onNoteUnlocked(content, password);
+          }}
+          onEncrypted={() => refreshNotes(config.storage_path)}
+          onRemoved={() => refreshNotes(config.storage_path)}
+        />
       )}
     </div>
   );

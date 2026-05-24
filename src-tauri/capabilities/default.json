@@ -5,9 +5,14 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
+    "core:webview:allow-print",
     "opener:default",
     "dialog:default",
     "fs:default",
+    "global-shortcut:default",
+    "deep-link:default",
+    "updater:default",
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [{ "path": "**" }]
@@ -19,6 +24,11 @@
     {
       "identifier": "fs:allow-exists",
       "allow": [{ "path": "**" }]
+    },
+    "dialog:allow-save",
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "$HOME/**" }]
     }
   ]
 }

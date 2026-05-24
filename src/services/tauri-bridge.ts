@@ -88,3 +88,73 @@ export async function getPinnedNotes(): Promise<string[]> {
 export async function togglePin(notePath: string): Promise<string[]> {
   return invoke('toggle_pin', { notePath });
 }
+
+// Image Paste
+export async function saveImage(notePath: string, imageData: number[], extension: string): Promise<string> {
+  return invoke<string>('save_image', { notePath, imageData, extension });
+}
+
+// Image Upload
+export async function uploadImage(imageData: number[], filename: string, service: string): Promise<string> {
+  return invoke<string>('upload_image', { imageData, filename, service });
+}
+
+// Window Management
+export async function setAlwaysOnTop(enabled: boolean): Promise<void> {
+  return invoke('set_always_on_top', { enabled });
+}
+
+// Backlinks
+export interface BacklinkItem {
+  title: string;
+  path: string;
+  context: string;
+}
+
+export async function getBacklinks(rootPath: string, noteTitle: string): Promise<BacklinkItem[]> {
+  return invoke<BacklinkItem[]>('get_backlinks', { rootPath, noteTitle });
+}
+
+// Sort Order
+export async function saveSortOrder(rootPath: string, folder: string, order: string[]): Promise<void> {
+  return invoke('save_sort_order', { rootPath, folder, order });
+}
+
+export async function getSortOrder(rootPath: string, folder: string): Promise<string[]> {
+  return invoke<string[]>('get_sort_order', { rootPath, folder });
+}
+
+// Encryption
+export async function encryptNote(path: string, password: string): Promise<void> {
+  return invoke('encrypt_note', { path, password });
+}
+
+export async function decryptNote(path: string, password: string): Promise<string> {
+  return invoke<string>('decrypt_note', { path, password });
+}
+
+export async function verifyPassword(path: string, password: string): Promise<boolean> {
+  return invoke<boolean>('verify_password', { path, password });
+}
+
+export async function saveEncryptedNote(path: string, content: string, password: string): Promise<void> {
+  return invoke('save_encrypted_note', { path, content, password });
+}
+
+export async function removeEncryption(path: string, password: string): Promise<void> {
+  return invoke('remove_encryption', { path, password });
+}
+
+// Cloud Sync
+export interface CloudSyncInfo {
+  status: 'Available' | 'Unavailable' | 'Syncing' | 'Synced' | { Error: string };
+  icloud_path: string | null;
+}
+
+export async function detectCloudSync(): Promise<CloudSyncInfo> {
+  return invoke<CloudSyncInfo>('detect_cloud_sync');
+}
+
+export async function getSyncStatus(path: string): Promise<string> {
+  return invoke<string>('get_sync_status', { path });
+}

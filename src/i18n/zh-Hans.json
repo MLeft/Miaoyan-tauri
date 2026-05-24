@@ -21,7 +21,8 @@
   "sort": {
     "modified": "修改时间",
     "created": "创建时间",
-    "title": "标题"
+    "title": "标题",
+    "custom": "自定义"
   },
   "editor": {
     "selectNote": "选择一个笔记或创建新笔记"
@@ -72,7 +73,20 @@
     "no": "否",
     "quickLaunch": "快捷唤起",
     "recording": "录制中...",
-    "clear": "清除"
+    "clear": "清除",
+    "lineEnding": "行尾模式",
+    "lineEndingLF": "妙言模式",
+    "lineEndingCRLF": "GitHub 模式",
+    "lineSpacing": "行间距",
+    "letterSpacing": "字间距",
+    "previewWidth": "预览宽度",
+    "previewWidthFull": "全宽",
+    "typography": "排版",
+    "titleFontSize": "标题字号",
+    "presentationFontSize": "演示字号",
+    "lineHeight": "行高",
+    "imageUploadService": "图片上传服务",
+    "imageUploadNone": "无（本地保存）"
   },
   "contextMenu": {
     "pin": "置顶",
@@ -80,17 +94,32 @@
     "rename": "重命名",
     "delete": "删除",
     "openInFinder": "在文件管理器中显示",
-    "duplicate": "复制"
+    "duplicate": "复制",
+    "bold": "粗体",
+    "italic": "斜体",
+    "strikethrough": "删除线",
+    "inlineCode": "内联代码",
+    "unorderedList": "无序列表",
+    "orderedList": "有序列表",
+    "todo": "待办事项",
+    "link": "链接",
+    "image": "图片",
+    "codeBlock": "代码块"
   },
   "export": {
-    "pdf": "导出为 PDF",
-    "html": "导出为 HTML",
-    "image": "导出为图片"
+    "pdf": "PDF",
+    "html": "HTML",
+    "image": "图片 (PNG)",
+    "markdown": "Markdown"
   },
   "version": {
     "title": "版本历史",
     "restore": "恢复此版本",
     "noVersions": "暂无版本历史"
+  },
+  "backlinks": {
+    "title": "反向链接",
+    "empty": "暂无反向链接"
   },
   "shortcuts": {
     "newNote": "新建笔记",
@@ -109,5 +138,36 @@
     "codeBlock": "代码块",
     "format": "格式化文档",
     "export": "导出"
+  },
+  "update": {
+    "title": "发现新版本",
+    "current": "当前版本：",
+    "new": "新版本：",
+    "changelog": "更新说明",
+    "install": "立即更新",
+    "later": "稍后提醒",
+    "skip": "跳过此版本",
+    "downloading": "下载中...",
+    "ready": "准备安装"
+  },
+  "sync": {
+    "icloudAvailable": "iCloud 同步可用",
+    "useIcloud": "使用 iCloud Drive",
+    "synced": "已同步",
+    "syncing": "同步中...",
+    "unavailable": "同步不可用",
+    "hint": "将存储路径设为云盘文件夹以启用同步"
+  },
+  "encryption": {
+    "unlock": "解锁笔记",
+    "encrypt": "加密笔记",
+    "removeEncryption": "移除加密",
+    "password": "密码",
+    "confirmPassword": "确认密码",
+    "warning": "警告：密码丢失后无法恢复内容",
+    "wrongPassword": "密码错误",
+    "success": "加密已应用",
+    "removed": "加密已移除",
+    "mismatch": "两次密码不一致"
   }
 }

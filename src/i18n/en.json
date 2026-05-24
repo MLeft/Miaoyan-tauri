@@ -21,7 +21,8 @@
   "sort": {
     "modified": "Modified",
     "created": "Created",
-    "title": "Title"
+    "title": "Title",
+    "custom": "Custom"
   },
   "editor": {
     "selectNote": "Select a note or create a new one"
@@ -71,7 +72,21 @@
     "yes": "Yes",
     "no": "No",
     "quickLaunch": "Quick Launch",
-    "clear": "Clear"
+    "recording": "Recording...",
+    "clear": "Clear",
+    "lineEnding": "Line Ending",
+    "lineEndingLF": "MiaoYan Mode",
+    "lineEndingCRLF": "GitHub Mode",
+    "lineSpacing": "Line Spacing",
+    "letterSpacing": "Letter Spacing",
+    "previewWidth": "Preview Width",
+    "previewWidthFull": "Full Width",
+    "typography": "Typography",
+    "titleFontSize": "Title Font Size",
+    "presentationFontSize": "Presentation Font Size",
+    "lineHeight": "Line Height",
+    "imageUploadService": "Image Upload Service",
+    "imageUploadNone": "None (Local)"
   },
   "contextMenu": {
     "pin": "Pin",
@@ -79,17 +94,32 @@
     "rename": "Rename",
     "delete": "Delete",
     "openInFinder": "Show in File Manager",
-    "duplicate": "Duplicate"
+    "duplicate": "Duplicate",
+    "bold": "Bold",
+    "italic": "Italic",
+    "strikethrough": "Strikethrough",
+    "inlineCode": "Inline Code",
+    "unorderedList": "Unordered List",
+    "orderedList": "Ordered List",
+    "todo": "Todo",
+    "link": "Link",
+    "image": "Image",
+    "codeBlock": "Code Block"
   },
   "export": {
-    "pdf": "Export as PDF",
-    "html": "Export as HTML",
-    "image": "Export as Image"
+    "pdf": "PDF",
+    "html": "HTML",
+    "image": "Image (PNG)",
+    "markdown": "Markdown"
   },
   "version": {
     "title": "Version History",
     "restore": "Restore this version",
     "noVersions": "No version history"
+  },
+  "backlinks": {
+    "title": "Backlinks",
+    "empty": "No backlinks"
   },
   "shortcuts": {
     "newNote": "New Note",
@@ -108,5 +138,36 @@
     "codeBlock": "Code Block",
     "format": "Format Document",
     "export": "Export"
+  },
+  "update": {
+    "title": "Update Available",
+    "current": "Current:",
+    "new": "New:",
+    "changelog": "Changelog",
+    "install": "Install Now",
+    "later": "Later",
+    "skip": "Skip This Version",
+    "downloading": "Downloading...",
+    "ready": "Ready to install"
+  },
+  "sync": {
+    "icloudAvailable": "iCloud Sync Available",
+    "useIcloud": "Use iCloud Drive",
+    "synced": "Synced",
+    "syncing": "Syncing...",
+    "unavailable": "Sync Unavailable",
+    "hint": "Set storage path to a cloud folder for sync"
+  },
+  "encryption": {
+    "unlock": "Unlock Note",
+    "encrypt": "Encrypt Note",
+    "removeEncryption": "Remove Encryption",
+    "password": "Password",
+    "confirmPassword": "Confirm Password",
+    "warning": "Warning: Password cannot be recovered if lost",
+    "wrongPassword": "Incorrect password",
+    "success": "Encryption applied",
+    "removed": "Encryption removed",
+    "mismatch": "Passwords do not match"
   }
 }

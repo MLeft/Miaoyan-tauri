@@ -21,7 +21,8 @@
   "sort": {
     "modified": "修改時間",
     "created": "建立時間",
-    "title": "標題"
+    "title": "標題",
+    "custom": "自訂"
   },
   "editor": {
     "selectNote": "選擇一個筆記或建立新筆記"
@@ -69,7 +70,20 @@
     "yes": "是",
     "no": "否",
     "quickLaunch": "快捷喚起",
-    "clear": "清除"
+    "clear": "清除",
+    "lineEnding": "行尾模式",
+    "lineEndingLF": "妙言模式",
+    "lineEndingCRLF": "GitHub 模式",
+    "lineSpacing": "行間距",
+    "letterSpacing": "字間距",
+    "previewWidth": "預覽寬度",
+    "previewWidthFull": "全寬",
+    "typography": "排版",
+    "titleFontSize": "標題字型大小",
+    "presentationFontSize": "簡報字型大小",
+    "lineHeight": "行高",
+    "imageUploadService": "圖片上傳服務",
+    "imageUploadNone": "無（本地儲存）"
   },
   "contextMenu": {
     "pin": "置頂",
@@ -77,17 +91,32 @@
     "rename": "重新命名",
     "delete": "刪除",
     "openInFinder": "在檔案管理員中顯示",
-    "duplicate": "複製"
+    "duplicate": "複製",
+    "bold": "粗體",
+    "italic": "斜體",
+    "strikethrough": "刪除線",
+    "inlineCode": "內聯代碼",
+    "unorderedList": "無序列表",
+    "orderedList": "有序列表",
+    "todo": "待辦事項",
+    "link": "連結",
+    "image": "圖片",
+    "codeBlock": "程式碼區塊"
   },
   "export": {
-    "pdf": "匯出為 PDF",
-    "html": "匯出為 HTML",
-    "image": "匯出為圖片"
+    "pdf": "PDF",
+    "html": "HTML",
+    "image": "圖片 (PNG)",
+    "markdown": "Markdown"
   },
   "version": {
     "title": "版本歷史",
     "restore": "恢復此版本",
     "noVersions": "暫無版本歷史"
+  },
+  "backlinks": {
+    "title": "反向連結",
+    "empty": "無反向連結"
   },
   "shortcuts": {
     "newNote": "新建筆記",
@@ -106,5 +135,36 @@
     "codeBlock": "程式碼區塊",
     "format": "格式化文件",
     "export": "匯出"
+  },
+  "update": {
+    "title": "發現新版本",
+    "current": "當前版本：",
+    "new": "新版本：",
+    "changelog": "更新說明",
+    "install": "立即更新",
+    "later": "稍後提醒",
+    "skip": "跳過此版本",
+    "downloading": "下載中...",
+    "ready": "準備安裝"
+  },
+  "sync": {
+    "icloudAvailable": "iCloud 同步可用",
+    "useIcloud": "使用 iCloud Drive",
+    "synced": "已同步",
+    "syncing": "同步中...",
+    "unavailable": "同步不可用",
+    "hint": "將儲存路徑設為雲端資料夹以啟用同步"
+  },
+  "encryption": {
+    "unlock": "解鎖筆記",
+    "encrypt": "加密筆記",
+    "removeEncryption": "移除加密",
+    "password": "密碼",
+    "confirmPassword": "確認密碼",
+    "warning": "警告：密碼遺失後無法復原內容",
+    "wrongPassword": "密碼錯誤",
+    "success": "加密已展開",
+    "removed": "加密已移除",
+    "mismatch": "兩次密碼不一致"
   }
 }

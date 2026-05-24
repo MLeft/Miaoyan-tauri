@@ -36,5 +36,18 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["miaoyan"]
+      }
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/anthropics/miaoyan/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
   }
 }

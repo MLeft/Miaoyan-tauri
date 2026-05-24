@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useTranslation } from 'react-i18next';
 import { Allotment } from 'allotment';
 import 'allotment/dist/style.css';
@@ -7,16 +8,22 @@ import { Preview } from './components/preview/Preview';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { PresentationMode } from './components/presentation/PresentationMode';
 import { TableOfContents } from './components/shared/TableOfContents';
+import { Backlinks } from './components/shared/Backlinks';
 import { ExportMenu } from './components/shared/ExportMenu';
 import { Toast } from './components/shared/Toast';
+import { UpdateDialog } from './components/shared/UpdateDialog';
 import { CombinedSidebar } from './components/sidebar/CombinedSidebar';
 import { formatMarkdown } from './services/formatter';
-import { createNote } from './services/tauri-bridge';
+import { createNote, createFolder, setAlwaysOnTop, writeNote } from './services/tauri-bridge';
+import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { useNotesStore } from './stores/notes-store';
 import { useSettingsStore } from './stores/settings-store';
 import { useEditorStore } from './stores/editor-store';
 import type { ViewMode } from './stores/editor-store';
 import { open } from '@tauri-apps/plugin-dialog';
+import { check } from '@tauri-apps/plugin-updater';
+import type { Update } from '@tauri-apps/plugin-updater';
+import { getVersion } from '@tauri-apps/api/app';
 import i18n from './i18n';
 
 /* ── Original MiaoYan SVG Icons (inline for currentColor theme support) ── */
@@ -97,11 +104,12 @@ function ToolbarButton({ onClick, active, title, children }: {
     <button
       onClick={onClick}
       title={title}
-      className="rounded transition-colors flex items-center justify-center"
+      className="rounded flex items-center justify-center btn-hover-transition"
       style={{
         width: '28px',
         height: '28px',
         color: active ? 'var(--accent-icon)' : 'var(--toolbar-icon-inactive)',
+        backgroundColor: 'transparent',
       }}
       onMouseEnter={(e) => {
         if (!active) {
@@ -142,12 +150,14 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
     <div
       className="h-10 flex items-center select-none"
       style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
-      data-tauri-drag-region
     >
-      {/* Left space - macOS traffic lights (~80px) + drag region */}
-      <div className="flex-1" data-tauri-drag-region />
+      {/* 左侧拖动区 - macOS 交通灯空间 */}
+      <div className="w-20 h-full" data-tauri-drag-region onMouseDown={() => getCurrentWindow().startDragging()} />
 
-      {/* Right - all buttons, right-aligned */}
+      {/* 中间拖动区 - 弹性扩展填满剩余空间 */}
+      <div className="flex-1 h-full" data-tauri-drag-region onMouseDown={() => getCurrentWindow().startDragging()} />
+
+      {/* 右侧按钮组 - 不设置 drag-region */}
       {/* Order mirrors original MiaoYan: List → Format → Split → Preview → Presentation */}
       <div className="flex items-center gap-0.5 px-2 flex-shrink-0">
         <ToolbarButton onClick={toggleSidebar} active={config.show_sidebar} title={`${t('toolbar.toggleSidebar')} (Cmd+1)`}>
@@ -189,6 +199,9 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
 
 function EditorPane() {
   const { viewMode, showToc, toggleToc } = useEditorStore();
+  const { activeNote } = useNotesStore();
+  const { config } = useSettingsStore();
+  const [showBacklinks, setShowBacklinks] = useState(false);
 
   const handleTocNavigate = (line: number) => {
     // Always try to scroll the editor (works in editor/split modes)
@@ -200,23 +213,45 @@ function EditorPane() {
     }
   };
 
+  useEffect(() => {
+    const handler = () => setShowBacklinks((v) => !v);
+    window.addEventListener('toggle-backlinks', handler);
+    return () => window.removeEventListener('toggle-backlinks', handler);
+  }, []);
+
+  const handleBacklinkNavigate = (path: string) => {
+    const notes = useNotesStore.getState().notes;
+    const target = notes.find((n) => n.path === path);
+    if (target) {
+      useNotesStore.getState().selectNote(target);
+    }
+  };
+
   return (
-    <div className="h-full relative">
-      {viewMode === 'split' ? (
-        <Allotment>
-          <Allotment.Pane minSize={300}>
-            <Editor />
-          </Allotment.Pane>
-          <Allotment.Pane minSize={300}>
-            <Preview />
-          </Allotment.Pane>
-        </Allotment>
-      ) : viewMode === 'preview' ? (
-        <Preview />
-      ) : (
-        <Editor />
-      )}
-      {showToc && <TableOfContents onNavigate={handleTocNavigate} onClose={toggleToc} />}
+    <div className="h-full flex flex-col relative">
+      <div className="flex-1 relative">
+        {viewMode === 'split' ? (
+          <Allotment>
+            <Allotment.Pane minSize={300}>
+              <Editor />
+            </Allotment.Pane>
+            <Allotment.Pane minSize={300}>
+              <Preview />
+            </Allotment.Pane>
+          </Allotment>
+        ) : viewMode === 'preview' ? (
+          <Preview />
+        ) : (
+          <Editor />
+        )}
+        {showToc && <TableOfContents onNavigate={handleTocNavigate} onClose={toggleToc} />}
+      </div>
+      <Backlinks
+        noteTitle={activeNote?.title || ''}
+        rootPath={config.storage_path}
+        onNavigate={handleBacklinkNavigate}
+        visible={showBacklinks}
+      />
     </div>
   );
 }
@@ -263,6 +298,9 @@ export default function App() {
   const [showExport, setShowExport] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
+  const [showUpdate, setShowUpdate] = useState(false);
+  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
+  const [appVersion, setAppVersion] = useState('');
 
   const handleFormat = async () => {    const content = useNotesStore.getState().activeContent;
     if (!content) return;
@@ -294,7 +332,80 @@ export default function App() {
     } catch (e) { console.error('Failed to create note:', e); }
   };
 
+  function handleDeepLink(url: string) {
+    try {
+      const parsed = new URL(url);
+      const action = parsed.hostname;
+      const params = parsed.searchParams;
+      const store = useNotesStore.getState();
+      const settingsStore = useSettingsStore.getState();
+      const storagePath = settingsStore.config.storage_path;
+
+      switch (action) {
+        case 'open': {
+          const title = params.get('title');
+          if (title && storagePath) {
+            const target = store.notes.find(n => n.title.toLowerCase() === title.toLowerCase());
+            if (target) {
+              store.selectNote(target);
+            }
+          }
+          break;
+        }
+        case 'new': {
+          const newTitle = params.get('title') || 'Untitled';
+          const content = params.get('content') || '';
+          const folder = store.activeFolder || storagePath;
+          if (folder) {
+            createNote(folder, newTitle).then(async (note) => {
+              if (content) {
+                await writeNote(note.path, content);
+              }
+              await store.refreshNotes(storagePath);
+              await store.selectNote(note);
+            }).catch(e => console.error('Deep-link: failed to create note:', e));
+          }
+          break;
+        }
+        case 'search': {
+          const query = params.get('q');
+          if (query && storagePath) {
+            store.setSearchQuery(query, storagePath);
+            // Ensure sidebar is visible
+            if (!settingsStore.config.show_sidebar) {
+              settingsStore.updateConfig({ show_sidebar: true });
+            }
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to handle deep link:', e);
+    }
+  }
+
   useEffect(() => { loadConfig(); }, []);
+
+  // Auto-check for updates after 3-second delay on startup
+  useEffect(() => {
+    getVersion().then((v) => setAppVersion(v)).catch(() => {});
+    const timer = setTimeout(async () => {
+      try {
+        const update = await check();
+        if (update) {
+          const skippedVersion = localStorage.getItem('skippedUpdateVersion');
+          if (skippedVersion !== update.version) {
+            setPendingUpdate(update);
+            setShowUpdate(true);
+          }
+        }
+      } catch (err) {
+        // Silently ignore update check failures (e.g. no network, dev mode)
+        console.warn('Update check failed:', err);
+      }
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (!loaded) return;
@@ -323,6 +434,23 @@ export default function App() {
     }
   }, [config.storage_path]);
 
+  // Apply always_on_top on startup or config change
+  useEffect(() => {
+    if (loaded) {
+      setAlwaysOnTop(config.always_on_top).catch(console.error);
+    }
+  }, [config.always_on_top, loaded]);
+
+  // Deep-link handler
+  useEffect(() => {
+    const unlisten = onOpenUrl((urls) => {
+      for (const url of urls) {
+        handleDeepLink(url);
+      }
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
   useEffect(() => {
     const handler = (e: Event) => {
       const { title } = (e as CustomEvent).detail;
@@ -342,11 +470,46 @@ export default function App() {
       if (mod && e.key === '3') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); setViewMode(viewMode === 'preview' ? 'split' : 'preview'); }
       if (mod && e.key === '4') { e.preventDefault(); setShowPresentation(p => !p); }
       if (mod && e.key === '\\') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); const modes: ViewMode[] = ['editor', 'split', 'preview']; const idx = modes.indexOf(viewMode); setViewMode(modes[(idx + 1) % modes.length]); }
+      if (mod && e.key === 'i' && e.altKey) { e.preventDefault(); window.dispatchEvent(new CustomEvent('toggle-backlinks')); }
       if (mod && e.key === ',') { e.preventDefault(); setShowSettings(true); }
       if (mod && e.key === 'e' && e.shiftKey) { e.preventDefault(); setShowExport(p => !p); }
       if (mod && e.key === 'l' && e.shiftKey) {
         e.preventDefault();
         handleFormat();
+      }
+      // Cmd+F: focus sidebar search
+      if (mod && !e.shiftKey && e.key === 'f') {
+        e.preventDefault();
+        // Ensure sidebar is visible
+        if (!useSettingsStore.getState().config.show_sidebar) {
+          useSettingsStore.getState().updateConfig({ show_sidebar: true });
+        }
+        window.dispatchEvent(new CustomEvent('sidebar-focus-search'));
+      }
+      // Cmd+Shift+N: create new folder
+      if (mod && e.shiftKey && e.key === 'N') {
+        e.preventDefault();
+        const name = prompt('New folder name:');
+        if (!name) return;
+        const storagePath = useSettingsStore.getState().config.storage_path;
+        const { activeFolder } = useNotesStore.getState();
+        const parent = activeFolder || storagePath;
+        if (!parent) return;
+        try {
+          await createFolder(parent, name);
+          await useNotesStore.getState().refreshNotes(storagePath);
+        } catch (err) { console.error('Failed to create folder:', err); }
+      }
+      // Cmd+R: rename active note
+      if (mod && !e.shiftKey && e.key === 'r') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('sidebar-rename-note'));
+      }
+      // Cmd+D: duplicate active note
+      if (mod && !e.shiftKey && e.key === 'd') {
+        e.preventDefault();
+        const storagePath = useSettingsStore.getState().config.storage_path;
+        await useNotesStore.getState().duplicateNote(storagePath);
       }
     };
     window.addEventListener('keydown', handler);
@@ -378,7 +541,7 @@ export default function App() {
       <div className="flex-1 overflow-hidden relative">
         <Allotment>
           {config.show_sidebar && (
-            <Allotment.Pane minSize={200} preferredSize={260} maxSize={380}>
+            <Allotment.Pane minSize={180} preferredSize={240} maxSize={320}>
               <CombinedSidebar />
             </Allotment.Pane>
           )}
@@ -386,11 +549,21 @@ export default function App() {
             <EditorPane />
           </Allotment.Pane>
         </Allotment>
-        {showExport && <ExportMenu onClose={() => setShowExport(false)} />}
+        {showExport && <ExportMenu onClose={() => setShowExport(false)} showToast={(msg) => { setToastMessage(msg); setToastVisible(true); }} />}
       </div>
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {showPresentation && <PresentationMode onClose={() => setShowPresentation(false)} />}
       <Toast message={toastMessage} visible={toastVisible} onClose={() => setToastVisible(false)} />
+      <UpdateDialog
+        visible={showUpdate}
+        update={pendingUpdate}
+        currentVersion={appVersion}
+        onClose={() => setShowUpdate(false)}
+        onSkip={(version) => {
+          localStorage.setItem('skippedUpdateVersion', version);
+          setShowUpdate(false);
+        }}
+      />
     </div>
   );
 }

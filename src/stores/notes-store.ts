@@ -6,8 +6,13 @@ import {
   getProjects,
   readNote,
   writeNote,
+  createNote,
   searchNotes,
+  getSortOrder,
+  saveSortOrder as saveSortOrderBridge,
+  saveEncryptedNote,
 } from '../services/tauri-bridge';
+import { useSettingsStore } from './settings-store';
 
 interface NotesState {
   projects: Project[];
@@ -22,6 +27,12 @@ interface NotesState {
   isDirty: boolean;
   saveTimer: ReturnType<typeof setTimeout> | null;
 
+  customSortOrder: string[]; // note paths in custom order
+
+  // Encryption state
+  encryptionDialog: { visible: boolean; mode: 'unlock' | 'encrypt' | 'remove'; notePath: string } | null;
+  activeEncryptionPassword: string | null; // password for currently open encrypted note
+
   loadProjects: (rootPath: string) => Promise<void>;
   loadNotes: (rootPath: string) => Promise<void>;
   loadNotesInFolder: (folderPath: string, rootPath: string) => Promise<void>;
@@ -33,6 +44,12 @@ interface NotesState {
   setSortMode: (mode: SortMode) => void;
   toggleSortDirection: () => void;
   refreshNotes: (rootPath: string) => Promise<void>;
+  duplicateNote: (rootPath: string) => Promise<void>;
+  loadCustomSortOrder: (rootPath: string, folder: string | null) => Promise<void>;
+  applyCustomSortOrder: (rootPath: string, folder: string | null, noteIds: string[]) => Promise<void>;
+  setEncryptionDialog: (dialog: NotesState['encryptionDialog']) => void;
+  onNoteUnlocked: (content: string, password: string) => void;
+  clearEncryptionPassword: () => void;
 }
 
 export const useNotesStore = create<NotesState>((set, get) => ({
@@ -47,6 +64,11 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   isLoading: false,
   isDirty: false,
   saveTimer: null,
+
+  customSortOrder: [],
+
+  encryptionDialog: null,
+  activeEncryptionPassword: null,
 
   loadProjects: async (rootPath) => {
     try {
@@ -86,7 +108,17 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       await get().saveCurrentNote();
     }
 
-    set({ activeNote: note, isLoading: true });
+    set({ activeNote: note, isLoading: true, activeEncryptionPassword: null });
+
+    // If encrypted, show unlock dialog instead of loading content
+    if (note.is_encrypted) {
+      set({ activeContent: '', isLoading: false, isDirty: false });
+      set({
+        encryptionDialog: { visible: true, mode: 'unlock', notePath: note.path },
+      });
+      return;
+    }
+
     try {
       const result = await readNote(note.path);
       set({ activeContent: result.content, isLoading: false, isDirty: false });
@@ -111,11 +143,25 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   saveCurrentNote: async () => {
-    const { activeNote, activeContent, isDirty } = get();
+    const { activeNote, activeContent, isDirty, activeEncryptionPassword } = get();
     if (!activeNote || !isDirty) return;
 
     try {
-      await writeNote(activeNote.path, activeContent);
+      // Apply line ending conversion based on config
+      const { config } = useSettingsStore.getState();
+      let contentToSave = activeContent;
+      if (config.line_ending === 'crlf') {
+        contentToSave = activeContent.replace(/(?<!\r)\n/g, '\r\n');
+      } else {
+        contentToSave = activeContent.replace(/\r\n/g, '\n');
+      }
+
+      if (activeNote.is_encrypted && activeEncryptionPassword) {
+        // Save as encrypted
+        await saveEncryptedNote(activeNote.path, contentToSave, activeEncryptionPassword);
+      } else {
+        await writeNote(activeNote.path, contentToSave);
+      }
       set({ isDirty: false });
     } catch (e) {
       console.error('Failed to save note:', e);
@@ -148,6 +194,10 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     } else {
       await get().loadNotes(rootPath);
     }
+    // Load custom sort order for this folder
+    if (get().sortMode === 'custom') {
+      await get().loadCustomSortOrder(rootPath, folder);
+    }
   },
 
   setSortMode: (mode) => {
@@ -156,6 +206,27 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
   toggleSortDirection: () => {
     set((state) => ({ sortDirection: state.sortDirection === 'asc' ? 'desc' : 'asc' }));
+  },
+
+  loadCustomSortOrder: async (rootPath, folder) => {
+    try {
+      const folderKey = folder || '';
+      const order = await getSortOrder(rootPath, folderKey);
+      set({ customSortOrder: order });
+    } catch (e) {
+      console.error('Failed to load custom sort order:', e);
+      set({ customSortOrder: [] });
+    }
+  },
+
+  applyCustomSortOrder: async (rootPath, folder, noteIds) => {
+    try {
+      const folderKey = folder || '';
+      await saveSortOrderBridge(rootPath, folderKey, noteIds);
+      set({ customSortOrder: noteIds });
+    } catch (e) {
+      console.error('Failed to save custom sort order:', e);
+    }
   },
 
   refreshNotes: async (rootPath) => {
@@ -168,5 +239,32 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       await get().loadNotes(rootPath);
     }
     await get().loadProjects(rootPath);
+  },
+
+  duplicateNote: async (rootPath) => {
+    const { activeNote, activeFolder } = get();
+    if (!activeNote) return;
+    try {
+      const result = await readNote(activeNote.path);
+      const copyTitle = `${activeNote.title} copy`;
+      const folder = activeFolder || rootPath;
+      const newNote = await createNote(folder, copyTitle);
+      await writeNote(newNote.path, result.content);
+      await get().refreshNotes(rootPath);
+    } catch (e) {
+      console.error('Failed to duplicate note:', e);
+    }
+  },
+
+  setEncryptionDialog: (dialog) => {
+    set({ encryptionDialog: dialog });
+  },
+
+  onNoteUnlocked: (content, password) => {
+    set({ activeContent: content, isDirty: false, activeEncryptionPassword: password });
+  },
+
+  clearEncryptionPassword: () => {
+    set({ activeEncryptionPassword: null });
   },
 }));

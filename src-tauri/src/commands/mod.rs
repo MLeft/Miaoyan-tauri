@@ -1,8 +1,11 @@
 use std::fs;
 use std::path::Path;
 use tauri::command;
-use crate::models::{NoteMetadata, NoteContent, Project, AppConfig};
+use crate::models::{NoteMetadata, NoteContent, Project, AppConfig, BacklinkItem};
 use crate::services::storage;
+use crate::services::cloud_sync::{self, CloudSyncInfo};
+use crate::services::encryption;
+use uuid::Uuid;
 
 #[command]
 pub fn get_projects(root_path: String) -> Vec<Project> {
@@ -68,6 +71,7 @@ pub fn create_note(folder_path: String, title: String) -> Result<NoteMetadata, S
         modified_at,
         pinned: false,
         size: 0,
+        is_encrypted: false,
     })
 }
 
@@ -285,63 +289,98 @@ fn inject_sourcepos(html: String, annotations: &[(String, usize)]) -> String {
     result
 }
 
-/// Post-process HTML to add bidirectional footnote linking.
-/// Adds id="fnref-N" to footnote reference sup elements
-/// and a back-link inside definitions so clicking navigates back.
+/// Post-process HTML to convert pulldown-cmark footnote format to cmark-gfm compatible format.
+///
+/// pulldown-cmark generates:
+///   <sup class="footnote-reference"><a href="#1">1</a></sup>
+///   <div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup>
+///   <p>content</p></div>
+///
+/// Target cmark-gfm format:
+///   <sup class="footnote-ref"><a href="#fn-1" id="fnref-1" data-footnote-ref>1</a></sup>
+///   <section class="footnotes" data-footnotes><ol>
+///   <li id="fn-1"><p>content <a href="#fnref-1" class="footnote-backref" data-footnote-backref aria-label="Back to content">↩</a></p></li>
+///   </ol></section>
 fn add_footnote_backlinks(html: String) -> String {
     let mut result = html;
     let mut ref_counter: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
-    // Step 1: Add id="fnref-N" to each <sup class="footnote-reference">
-    // Using r##"..."## raw strings so # inside the regex is not ambiguous
-    let ref_re = regex::Regex::new(r##"<sup class="footnote-reference"><a href="#([^"]+)">"##).unwrap();
-    let mut ref_indices: Vec<(usize, usize, String, usize)> = Vec::new();
+    // Step 1: Transform footnote references from pulldown-cmark to cmark-gfm format
+    // <sup class="footnote-reference"><a href="#N"> → <sup class="footnote-ref"><a href="#fn-N" id="fnref-N" data-footnote-ref>
+    // For multiple references to same footnote: id="fnref-N-2", id="fnref-N-3", etc.
+    let ref_re =
+        regex::Regex::new(r##"<sup class="footnote-reference"><a href="#([^"]+)">"##).unwrap();
+    let mut ref_matches: Vec<(usize, usize, String, usize)> = Vec::new();
 
-    for cap in ref_re.captures_iter(&result.clone()) {
+    for cap in ref_re.captures_iter(&result) {
         let footnote_id = cap[1].to_string();
         let count = ref_counter.entry(footnote_id.clone()).or_insert(0);
         *count += 1;
         let m = cap.get(0).unwrap();
-        ref_indices.push((m.start(), m.end(), footnote_id, *count));
+        ref_matches.push((m.start(), m.end(), footnote_id, *count));
     }
 
     // Apply from end to start to preserve byte positions
-    for (start, end, footnote_id, occurrence) in ref_indices.into_iter().rev() {
-        let fnref_id = format!("fnref-{}-{}", footnote_id, occurrence);
+    for (start, end, footnote_id, occurrence) in ref_matches.into_iter().rev() {
+        let fnref_id = if occurrence == 1 {
+            format!("fnref-{}", footnote_id)
+        } else {
+            format!("fnref-{}-{}", footnote_id, occurrence)
+        };
         let replacement = format!(
-            r##"<sup class="footnote-reference" id="{}"><a href="#{}">"##,
-            fnref_id, footnote_id
+            r##"<sup class="footnote-ref"><a href="#fn-{}" id="{}" data-footnote-ref>"##,
+            footnote_id, fnref_id
         );
         result.replace_range(start..end, &replacement);
     }
 
-    // Step 2: For each footnote definition, add back-link at end of last <p>
-    // pulldown-cmark generates:
-    //   <div class="footnote-definition" id="N"><sup ...>N</sup><p>text</p></div>
-    // We want ↩ appended inside the last </p> before </div>, matching original cmark-gfm style.
+    // Step 2: Transform footnote definitions from pulldown-cmark to cmark-gfm format
+    // Collect all definition blocks, then remove them and rebuild as a <section>.
     let def_block_re = regex::Regex::new(
-        r##"(<div class="footnote-definition" id="([^"]+)">)([\s\S]*?)(</div>)"##
+        r##"<div class="footnote-definition" id="([^"]+)"><sup class="footnote-definition-label">[^<]*</sup>([\s\S]*?)</div>"##
     ).unwrap();
 
-    result = def_block_re.replace_all(&result, |caps: &regex::Captures| {
-        let open_tag = &caps[1];
-        let footnote_id = &caps[2];
-        let inner = &caps[3];
-        let close_tag = &caps[4];
+    let mut definitions: Vec<(String, String)> = Vec::new();
+    let result_clone = result.clone();
+    for cap in def_block_re.captures_iter(&result_clone) {
+        let footnote_id = cap[1].to_string();
+        let content = cap[2].trim().to_string();
+        definitions.push((footnote_id, content));
+    }
+
+    // Remove all definition divs from result
+    result = def_block_re.replace_all(&result, "").to_string();
+
+    if definitions.is_empty() {
+        return result;
+    }
+
+    // Build the footnotes section in cmark-gfm format
+    let mut section = String::from(r##"<section class="footnotes" data-footnotes><ol>"##);
+
+    for (footnote_id, content) in &definitions {
         let backref = format!(
-            r##" <a class="footnote-backref" href="#fnref-{}-1">↩</a>"##,
+            r##" <a href="#fnref-{}" class="footnote-backref" data-footnote-backref aria-label="Back to content">↩</a>"##,
             footnote_id
         );
-        // Insert ↩ before the last </p> inside this definition block
-        if let Some(last_p_pos) = inner.rfind("</p>") {
-            let mut new_inner = inner.to_string();
-            new_inner.insert_str(last_p_pos, &backref);
-            format!("{}{}{}", open_tag, new_inner, close_tag)
+
+        let mut item_content = content.clone();
+        // Insert backref before last </p>
+        if let Some(pos) = item_content.rfind("</p>") {
+            item_content.insert_str(pos, &backref);
         } else {
-            // No <p>, append backref before closing div
-            format!("{}{}{}{}", open_tag, inner, backref, close_tag)
+            // No <p> tag, append backref at end
+            item_content.push_str(&backref);
         }
-    }).to_string();
+
+        section.push_str(&format!(
+            r##"<li id="fn-{}">{}</li>"##,
+            footnote_id, item_content
+        ));
+    }
+
+    section.push_str("</ol></section>");
+    result.push_str(&section);
 
     result
 }
@@ -449,6 +488,161 @@ pub fn restore_version(note_path: String, version_filename: String) -> Result<()
     Ok(())
 }
 
+// ===== Image Paste =====
+
+#[command]
+pub fn save_image(note_path: String, image_data: Vec<u8>, extension: String) -> Result<String, String> {
+    let note_dir = Path::new(&note_path)
+        .parent()
+        .ok_or("Cannot determine note directory")?;
+    let images_dir = note_dir.join("i");
+    fs::create_dir_all(&images_dir)
+        .map_err(|e| format!("Failed to create images directory: {}", e))?;
+
+    let id = Uuid::new_v4();
+    let filename = format!("img_{}.{}", id.as_simple(), extension);
+    let file_path = images_dir.join(&filename);
+
+    fs::write(&file_path, &image_data)
+        .map_err(|e| format!("Failed to write image: {}", e))?;
+
+    let relative_path = format!("i/{}", filename);
+    Ok(relative_path)
+}
+
+// ===== Backlinks =====
+
+#[command]
+pub fn get_backlinks(root_path: String, note_title: String) -> Result<Vec<BacklinkItem>, String> {
+    let root = Path::new(&root_path);
+    if !root.exists() || !root.is_dir() {
+        return Err("Invalid root path".to_string());
+    }
+
+    let mut backlinks = Vec::new();
+    let note_title_lower = note_title.to_lowercase();
+    let re = regex::Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]").unwrap();
+
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.') && name != "Trash"
+        })
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let ext = path.extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        if ext != "md" && ext != "markdown" && ext != "txt" {
+            continue;
+        }
+
+        // Skip hidden files
+        if let Some(name) = path.file_name() {
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+        }
+
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        // Check each line for [[note_title]] or [[note_title|alias]]
+        for line in content.lines() {
+            let mut found = false;
+            for cap in re.captures_iter(line) {
+                let link_target = cap[1].trim().to_lowercase();
+                if link_target == note_title_lower {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                let title = path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                backlinks.push(BacklinkItem {
+                    title,
+                    path: path.to_string_lossy().to_string(),
+                    context: line.trim().to_string(),
+                });
+                break; // Only add once per file
+            }
+        }
+    }
+
+    Ok(backlinks)
+}
+
+// ===== Window Management =====
+
+#[command]
+pub async fn set_always_on_top(window: tauri::Window, enabled: bool) -> Result<(), String> {
+    window.set_always_on_top(enabled).map_err(|e| e.to_string())
+}
+
+// ===== Sort Order =====
+
+#[command]
+pub fn save_sort_order(root_path: String, folder: String, order: Vec<String>) -> Result<(), String> {
+    use std::collections::HashMap;
+    let config_dir = storage::ensure_config_dir();
+    let sort_file = config_dir.join("sort-order.json");
+
+    // Read existing data
+    let mut all_orders: HashMap<String, Vec<String>> = if sort_file.exists() {
+        let content = fs::read_to_string(&sort_file)
+            .map_err(|e| format!("Failed to read sort order file: {}", e))?;
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    // Use folder path as key; if folder is empty, use root_path
+    let key = if folder.is_empty() { root_path } else { folder };
+    all_orders.insert(key, order);
+
+    let content = serde_json::to_string_pretty(&all_orders)
+        .map_err(|e| format!("Failed to serialize sort order: {}", e))?;
+    fs::write(&sort_file, content)
+        .map_err(|e| format!("Failed to save sort order: {}", e))?;
+    Ok(())
+}
+
+#[command]
+pub fn get_sort_order(root_path: String, folder: String) -> Vec<String> {
+    use std::collections::HashMap;
+    let config_dir = storage::get_config_dir();
+    let sort_file = config_dir.join("sort-order.json");
+
+    if !sort_file.exists() {
+        return Vec::new();
+    }
+
+    let content = match fs::read_to_string(&sort_file) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let all_orders: HashMap<String, Vec<String>> = match serde_json::from_str(&content) {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+
+    let key = if folder.is_empty() { root_path } else { folder };
+    all_orders.get(&key).cloned().unwrap_or_default()
+}
+
 // ===== Pin Management =====
 
 #[command]
@@ -478,4 +672,134 @@ pub fn toggle_pin(note_path: String) -> Result<Vec<String>, String> {
     fs::write(&pins_path, content)
         .map_err(|e| format!("Failed to save pins: {}", e))?;
     Ok(pins)
+}
+
+// ===== Image Upload =====
+
+#[command]
+pub async fn upload_image(image_data: Vec<u8>, filename: String, service: String) -> Result<String, String> {
+    match service.as_str() {
+        "picgo" | "piclist" => {
+            let client = reqwest::Client::new();
+            let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+            let mime = if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
+                "image/jpeg"
+            } else if filename.ends_with(".gif") {
+                "image/gif"
+            } else {
+                "image/png"
+            };
+            let body = serde_json::json!({
+                "list": [format!("data:{};base64,{}", mime, base64_data)]
+            });
+            let resp = client
+                .post("http://127.0.0.1:36677/upload")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Upload request failed: {}", e))?;
+            let result: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse upload response: {}", e))?;
+            if result["success"].as_bool() == Some(true) {
+                let url = result["result"][0]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                if url.is_empty() {
+                    Err("Upload succeeded but no URL returned".to_string())
+                } else {
+                    Ok(url)
+                }
+            } else {
+                let msg = result["message"]
+                    .as_str()
+                    .unwrap_or("Upload failed")
+                    .to_string();
+                Err(msg)
+            }
+        }
+        "upic" => Err("uPic upload via URL scheme is not yet supported".to_string()),
+        "picsee" => Err("Picsee upload is not yet supported".to_string()),
+        _ => Err(format!("Unknown upload service: {}", service)),
+    }
+}
+
+// ===== Cloud Sync =====
+
+#[command]
+pub fn detect_cloud_sync() -> CloudSyncInfo {
+    cloud_sync::detect_icloud()
+}
+
+#[command]
+pub fn get_sync_status(path: String) -> String {
+    cloud_sync::sync_status_str(&path).to_string()
+}
+
+// ===== Encryption =====
+
+#[command]
+pub async fn encrypt_note(path: String, password: String) -> Result<(), String> {
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let encrypted = encryption::encrypt(&content, &password)?;
+    let encrypted_path = format!("{}.encrypted", path);
+    fs::write(&encrypted_path, &encrypted)
+        .map_err(|e| format!("Failed to write encrypted file: {}", e))?;
+    fs::remove_file(&path)
+        .map_err(|e| format!("Failed to delete original file: {}", e))?;
+    Ok(())
+}
+
+#[command]
+pub async fn decrypt_note(path: String, password: String) -> Result<String, String> {
+    let data = fs::read(&path)
+        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+    encryption::decrypt(&data, &password)
+}
+
+#[command]
+pub async fn verify_password(path: String, password: String) -> Result<bool, String> {
+    let data = fs::read(&path)
+        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+    match encryption::decrypt(&data, &password) {
+        Ok(_) => Ok(true),
+        Err(e) if e.contains("Invalid password") => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+#[command]
+pub async fn save_encrypted_note(path: String, content: String, password: String) -> Result<(), String> {
+    let encrypted = encryption::encrypt(&content, &password)?;
+    // path should be the .md.encrypted file path
+    let encrypted_path = if path.ends_with(".encrypted") {
+        path.clone()
+    } else {
+        format!("{}.encrypted", path)
+    };
+    if let Some(parent) = Path::new(&encrypted_path).parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    fs::write(&encrypted_path, &encrypted)
+        .map_err(|e| format!("Failed to write encrypted file: {}", e))?;
+    Ok(())
+}
+
+#[command]
+pub async fn remove_encryption(path: String, password: String) -> Result<(), String> {
+    // path is the .md.encrypted file
+    let data = fs::read(&path)
+        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
+    let content = encryption::decrypt(&data, &password)?;
+    // Write plaintext to .md file (strip .encrypted suffix)
+    let md_path = path.trim_end_matches(".encrypted").to_string();
+    fs::write(&md_path, &content)
+        .map_err(|e| format!("Failed to write plaintext file: {}", e))?;
+    fs::remove_file(&path)
+        .map_err(|e| format!("Failed to delete encrypted file: {}", e))?;
+    Ok(())
 }

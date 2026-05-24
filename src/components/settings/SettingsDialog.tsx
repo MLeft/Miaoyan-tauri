@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../stores/settings-store';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
+import { setAlwaysOnTop, detectCloudSync, type CloudSyncInfo } from '../../services/tauri-bridge';
 
-type Tab = 'interface' | 'experience' | 'editor';
+type Tab = 'interface' | 'experience' | 'editor' | 'typography';
 
 // 原版 PrefsFormMetrics
 const LABEL_WIDTH = 164;   // px
@@ -21,12 +22,19 @@ export function SettingsDialog({ onClose }: Props) {
   const { t } = useTranslation();
   const { config, updateConfig } = useSettingsStore();
   const [activeTab, setActiveTab] = useState<Tab>('interface');
-  const [shortcutRecording, setShortcutRecording] = useState(false);
+  const [cloudInfo, setCloudInfo] = useState<CloudSyncInfo | null>(null);
+
+  useEffect(() => {
+    detectCloudSync()
+      .then(setCloudInfo)
+      .catch(() => {});
+  }, []);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'interface', label: t('settings.general') },
     { id: 'experience', label: t('settings.editor') },
     { id: 'editor', label: t('settings.preview') },
+    { id: 'typography', label: t('settings.typography') },
   ];
 
   const handleSelectFolder = async () => {
@@ -40,42 +48,19 @@ export function SettingsDialog({ onClose }: Props) {
     }
   };
 
-  // 快捷键录制
-  useEffect(() => {
-    if (!shortcutRecording) return;
-    const handler = (e: KeyboardEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const keys: string[] = [];
-      if (e.metaKey) keys.push('⌘');
-      if (e.ctrlKey) keys.push('⌃');
-      if (e.altKey) keys.push('⌥');
-      if (e.shiftKey) keys.push('⇧');
-      if (e.key && !['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) {
-        keys.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
-      }
-      if (keys.length > 0) {
-        updateConfig({ quick_launch_shortcut: keys.join('') });
-        setShortcutRecording(false);
-      }
-    };
-    window.addEventListener('keydown', handler, true);
-    return () => window.removeEventListener('keydown', handler, true);
-  }, [shortcutRecording, updateConfig]);
-
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-50 flex items-center justify-center dialog-overlay"
       style={{ backgroundColor: 'rgba(0,0,0,0.3)' }}
       onClick={onClose}
     >
       <div
-        className="flex rounded-xl overflow-hidden shadow-2xl"
+        className="flex rounded-xl overflow-hidden dialog-content"
         style={{
           width: 680,
           height: 480,
-          backgroundColor: 'var(--bg-primary, #fff)',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.25), 0 0 0 0.5px rgba(0,0,0,0.12)',
+          backgroundColor: 'var(--bg-primary)',
+          boxShadow: 'var(--shadow-lg), 0 0 0 0.5px var(--border)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -84,8 +69,8 @@ export function SettingsDialog({ onClose }: Props) {
           style={{
             width: 176,
             flexShrink: 0,
-            backgroundColor: 'var(--bg-secondary, #f2f2f7)',
-            borderRight: '0.5px solid var(--border, #d8d8d8)',
+            backgroundColor: 'var(--bg-secondary)',
+            borderRight: '0.5px solid var(--border)',
             paddingTop: 52, // 留出 titlebar 视觉空间
             paddingBottom: 12,
           }}
@@ -100,8 +85,8 @@ export function SettingsDialog({ onClose }: Props) {
                 padding: activeTab === tab.id ? '6px 16px' : '6px 24px',
                 fontSize: 13,
                 fontWeight: activeTab === tab.id ? 500 : 400,
-                color: activeTab === tab.id ? '#fff' : 'var(--text-primary, #1d1d1f)',
-                backgroundColor: activeTab === tab.id ? '#007AFF' : 'transparent',
+                color: activeTab === tab.id ? 'var(--text-inverse)' : 'var(--text-primary)',
+                backgroundColor: activeTab === tab.id ? 'var(--system-blue)' : 'transparent',
                 borderRadius: activeTab === tab.id ? 6 : 0,
                 margin: activeTab === tab.id ? '1px 8px' : '1px 0',
                 width: activeTab === tab.id ? 'calc(100% - 16px)' : '100%',
@@ -118,7 +103,7 @@ export function SettingsDialog({ onClose }: Props) {
         </div>
 
         {/* ── 右侧内容区 ── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-content, #fff)', position: 'relative' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-primary)', position: 'relative' }}>
           {/* 关闭按钮 */}
           <button
             onClick={onClose}
@@ -131,7 +116,7 @@ export function SettingsDialog({ onClose }: Props) {
               border: 'none',
               background: 'none',
               cursor: 'pointer',
-              color: 'var(--text-tertiary, #aaa)',
+              color: 'var(--text-tertiary)',
               fontSize: 18,
               lineHeight: '20px',
               display: 'flex',
@@ -151,11 +136,11 @@ export function SettingsDialog({ onClose }: Props) {
             paddingBottom: 0,
             fontSize: 13,
             fontWeight: 600,
-            color: 'var(--text-primary, #1d1d1f)',
+            color: 'var(--text-primary)',
             height: 44,
             display: 'flex',
             alignItems: 'center',
-            borderBottom: '0.5px solid var(--border, #e0e0e0)',
+            borderBottom: '0.5px solid var(--border)',
           }}>
             {tabs.find(t => t.id === activeTab)?.label}
           </div>
@@ -166,21 +151,33 @@ export function SettingsDialog({ onClose }: Props) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: ROW_GAP }}>
                 {/* Storage Path */}
                 <Row label={`${t('settings.storagePath')}:`}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{
-                      fontSize: 12,
-                      color: 'var(--text-secondary, #666)',
-                      maxWidth: 160,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      display: 'inline-block',
-                    }}>
-                      {config.storage_path
-                        ? config.storage_path.split('/').slice(-3).join('/')
-                        : t('settings.notSet')}
-                    </span>
-                    <MacButton onClick={handleSelectFolder}>{t('settings.change')}</MacButton>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{
+                        fontSize: 12,
+                        color: 'var(--text-secondary)',
+                        maxWidth: 160,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        display: 'inline-block',
+                      }}>
+                        {config.storage_path
+                          ? config.storage_path.split('/').slice(-3).join('/')
+                          : t('settings.notSet')}
+                      </span>
+                      <MacButton onClick={handleSelectFolder}>{t('settings.change')}</MacButton>
+                    </div>
+                    {/* iCloud sync hint */}
+                    <ICloudSyncHint
+                      cloudInfo={cloudInfo}
+                      storagePath={config.storage_path}
+                      onUseIcloud={async () => {
+                        if (!cloudInfo?.icloud_path) return;
+                        const miaoyanDir = `${cloudInfo.icloud_path}/MiaoYan`;
+                        await updateConfig({ storage_path: miaoyanDir });
+                      }}
+                    />
                   </div>
                 </Row>
 
@@ -218,6 +215,7 @@ export function SettingsDialog({ onClose }: Props) {
                       { value: 'zh-Hans', label: '简体中文' },
                       { value: 'zh-Hant', label: '繁體中文' },
                       { value: 'en', label: 'English' },
+                      { value: 'es', label: 'Español' },
                       { value: 'ja', label: '日本語' },
                     ]}
                   />
@@ -238,7 +236,11 @@ export function SettingsDialog({ onClose }: Props) {
                 <Row label={`${t('settings.alwaysOnTop')}:`}>
                   <MacSelect
                     value={config.always_on_top ? 'yes' : 'no'}
-                    onChange={(v) => updateConfig({ always_on_top: v === 'yes' })}
+                    onChange={async (v) => {
+                      const enabled = v === 'yes';
+                      await updateConfig({ always_on_top: enabled });
+                      await setAlwaysOnTop(enabled);
+                    }}
                     options={[
                       { value: 'yes', label: t('settings.yes') },
                       { value: 'no', label: t('settings.no') },
@@ -248,36 +250,22 @@ export function SettingsDialog({ onClose }: Props) {
 
                 <Row label={`${t('settings.quickLaunch')}:`}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <button
-                      onClick={() => setShortcutRecording(true)}
+                    <div
                       style={{
                         width: CONTROL_WIDTH,
                         height: ROW_HEIGHT - 4,
-                        border: `1px solid ${shortcutRecording ? '#007AFF' : 'var(--border, #ccc)'}`,
+                        border: '1px solid var(--border)',
                         borderRadius: 6,
-                        backgroundColor: shortcutRecording ? 'rgba(0,122,255,0.06)' : 'var(--bg-secondary, #f5f5f7)',
-                        color: 'var(--text-primary, #333)',
+                        backgroundColor: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
                         fontSize: 13,
-                        cursor: 'pointer',
-                        outline: 'none',
-                        textAlign: 'center',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                       }}
                     >
-                      {shortcutRecording
-                        ? t('settings.recording') || 'Recording...'
-                        : config.quick_launch_shortcut || '-'}
-                    </button>
-                    {config.quick_launch_shortcut && !shortcutRecording && (
-                      <button
-                        onClick={() => updateConfig({ quick_launch_shortcut: '' })}
-                        style={{
-                          border: 'none', background: 'none', cursor: 'pointer',
-                          color: 'var(--text-tertiary, #999)', fontSize: 16, padding: 0,
-                          lineHeight: 1,
-                        }}
-                        title={t('settings.clear')}
-                      >×</button>
-                    )}
+                      {config.quick_launch_shortcut || '⌘⌥M'}
+                    </div>
                   </div>
                 </Row>
               </div>
@@ -307,8 +295,45 @@ export function SettingsDialog({ onClose }: Props) {
                       onChange={(v) => updateConfig({ auto_save_interval: Number(v) })}
                       width={80}
                     />
-                    <span style={{ fontSize: 12, color: 'var(--text-tertiary, #999)' }}>ms</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>ms</span>
                   </div>
+                </Row>
+
+                <Separator />
+
+                <Row label={`${t('settings.lineEnding')}:`}>
+                  <MacSelect
+                    value={config.line_ending}
+                    onChange={(v) => updateConfig({ line_ending: v as 'lf' | 'crlf' })}
+                    options={[
+                      { value: 'lf', label: `LF (${t('settings.lineEndingLF')})` },
+                      { value: 'crlf', label: `CRLF (${t('settings.lineEndingCRLF')})` },
+                    ]}
+                  />
+                </Row>
+                <Row label={`${t('settings.lineSpacing')}:`}>
+                  <MacInput
+                    type="number"
+                    value={String(config.line_spacing)}
+                    onChange={(v) => {
+                      const val = Number(v);
+                      if (val >= 0.5 && val <= 10) updateConfig({ line_spacing: val });
+                    }}
+                    width={80}
+                    step={0.5}
+                  />
+                </Row>
+                <Row label={`${t('settings.letterSpacing')}:`}>
+                  <MacInput
+                    type="number"
+                    value={String(config.letter_spacing)}
+                    onChange={(v) => {
+                      const val = Number(v);
+                      if (val >= 0 && val <= 2) updateConfig({ letter_spacing: val });
+                    }}
+                    width={80}
+                    step={0.1}
+                  />
                 </Row>
 
                 <Separator />
@@ -339,6 +364,78 @@ export function SettingsDialog({ onClose }: Props) {
                     onChange={(v) => updateConfig({ code_font_family: v })}
                   />
                 </Row>
+
+                <Separator />
+
+                <Row label={`${t('settings.previewWidth')}:`}>
+                  <MacSelect
+                    value={config.preview_width}
+                    onChange={(v) => updateConfig({ preview_width: v as any })}
+                    options={[
+                      { value: '600', label: '600px' },
+                      { value: '800', label: '800px' },
+                      { value: '1000', label: '1000px' },
+                      { value: '1200', label: '1200px' },
+                      { value: '1400', label: '1400px' },
+                      { value: 'full', label: t('settings.previewWidthFull') },
+                    ]}
+                  />
+                </Row>
+
+                <Separator />
+
+                <Row label={`${t('settings.imageUploadService')}:`}>
+                  <MacSelect
+                    value={config.image_upload_service}
+                    onChange={(v) => updateConfig({ image_upload_service: v as any })}
+                    options={[
+                      { value: 'none', label: t('settings.imageUploadNone') },
+                      { value: 'picgo', label: 'PicGo' },
+                      { value: 'piclist', label: 'PicList' },
+                      { value: 'upic', label: 'uPic' },
+                      { value: 'picsee', label: 'Picsee' },
+                    ]}
+                  />
+                </Row>
+              </div>
+            )}
+
+            {activeTab === 'typography' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: ROW_GAP }}>
+                <Row label={`${t('settings.titleFontSize')}:`}>
+                  <MacInput
+                    type="number"
+                    value={String(config.title_font_size)}
+                    onChange={(v) => {
+                      const val = Number(v);
+                      if (val >= 12 && val <= 48) updateConfig({ title_font_size: val });
+                    }}
+                    width={80}
+                  />
+                </Row>
+                <Row label={`${t('settings.presentationFontSize')}:`}>
+                  <MacInput
+                    type="number"
+                    value={String(config.presentation_font_size)}
+                    onChange={(v) => {
+                      const val = Number(v);
+                      if (val >= 16 && val <= 72) updateConfig({ presentation_font_size: val });
+                    }}
+                    width={80}
+                  />
+                </Row>
+                <Row label={`${t('settings.lineHeight')}:`}>
+                  <MacInput
+                    type="number"
+                    value={String(config.line_height)}
+                    onChange={(v) => {
+                      const val = Number(v);
+                      if (val >= 1.0 && val <= 3.0) updateConfig({ line_height: val });
+                    }}
+                    width={80}
+                    step={0.1}
+                  />
+                </Row>
               </div>
             )}
           </div>
@@ -357,7 +454,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
         flexShrink: 0,
         textAlign: 'right',
         fontSize: 13,
-        color: 'var(--text-secondary, #555)',
+        color: 'var(--text-secondary)',
         paddingRight: 16,
         lineHeight: `${ROW_HEIGHT}px`,
       }}>
@@ -375,7 +472,7 @@ function Separator() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', minHeight: 1 }}>
       <div style={{ width: LABEL_WIDTH + 16, flexShrink: 0 }} />
-      <div style={{ flex: 1, height: '0.5px', backgroundColor: 'var(--border, #e0e0e0)' }} />
+      <div style={{ flex: 1, height: '0.5px', backgroundColor: 'var(--border)' }} />
     </div>
   );
 }
@@ -403,10 +500,10 @@ function MacSelect({
           paddingLeft: 10,
           paddingRight: 28,
           fontSize: 13,
-          border: '0.5px solid var(--border, #c7c7c7)',
+          border: '0.5px solid var(--border)',
           borderRadius: 6,
-          backgroundColor: 'var(--bg-secondary, #f5f5f7)',
-          color: 'var(--text-primary, #1d1d1f)',
+          backgroundColor: 'var(--bg-secondary)',
+          color: 'var(--text-primary)',
           cursor: 'pointer',
           outline: 'none',
         }}
@@ -419,7 +516,7 @@ function MacSelect({
       <svg
         style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}
         width="11" height="11" viewBox="0 0 24 24"
-        fill="none" stroke="#007AFF" strokeWidth="2.5"
+        fill="none" stroke="var(--system-blue)" strokeWidth="2.5"
         strokeLinecap="round" strokeLinejoin="round"
       >
         <polyline points="6 9 12 15 18 9" />
@@ -434,27 +531,30 @@ function MacInput({
   onChange,
   type = 'text',
   width,
+  step,
 }: {
   value: string;
   onChange: (v: string) => void;
   type?: string;
   width?: number;
+  step?: number;
 }) {
   return (
     <input
       type={type}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      step={step}
       style={{
         width: width ?? CONTROL_WIDTH,
         height: ROW_HEIGHT - 4,
         paddingLeft: 8,
         paddingRight: 8,
         fontSize: 13,
-        border: '0.5px solid var(--border, #c7c7c7)',
+        border: '0.5px solid var(--border)',
         borderRadius: 6,
-        backgroundColor: 'var(--bg-secondary, #f5f5f7)',
-        color: 'var(--text-primary, #1d1d1f)',
+        backgroundColor: 'var(--bg-secondary)',
+        color: 'var(--text-primary)',
         outline: 'none',
       }}
     />
@@ -471,10 +571,10 @@ function MacButton({ onClick, children }: { onClick: () => void; children: React
         paddingLeft: 12,
         paddingRight: 12,
         fontSize: 13,
-        border: '0.5px solid var(--border, #c7c7c7)',
+        border: '0.5px solid var(--border)',
         borderRadius: 6,
-        backgroundColor: 'var(--bg-secondary, #f5f5f7)',
-        color: 'var(--text-primary, #1d1d1f)',
+        backgroundColor: 'var(--bg-secondary)',
+        color: 'var(--text-primary)',
         cursor: 'pointer',
         outline: 'none',
         whiteSpace: 'nowrap',
@@ -501,6 +601,7 @@ function ShortcutList() {
     { keys: '⌘I', action: t('shortcuts.italic') },
     { keys: '⌘K', action: t('shortcuts.link') },
     { keys: '⌘E', action: t('shortcuts.codeBlock') },
+    { keys: '⌘⌥M', action: t('shortcuts.quickLaunch') || 'Quick Launch' },
   ];
 
   return (
@@ -510,7 +611,7 @@ function ShortcutList() {
         fontWeight: 600,
         textTransform: 'uppercase',
         letterSpacing: '0.06em',
-        color: 'var(--text-tertiary, #999)',
+        color: 'var(--text-tertiary)',
         paddingLeft: LABEL_WIDTH + 16,
         marginBottom: 10,
       }}>
@@ -531,7 +632,7 @@ function ShortcutList() {
             flexShrink: 0,
             textAlign: 'right',
             fontSize: 13,
-            color: 'var(--text-secondary, #555)',
+            color: 'var(--text-secondary)',
             paddingRight: 16,
           }}>
             {s.action}
@@ -539,9 +640,9 @@ function ShortcutList() {
           <kbd style={{
             fontSize: 12,
             fontFamily: 'ui-monospace, monospace',
-            color: 'var(--text-secondary, #555)',
-            backgroundColor: 'var(--bg-secondary, #f5f5f5)',
-            border: '0.5px solid var(--border, #ddd)',
+            color: 'var(--text-secondary)',
+            backgroundColor: 'var(--bg-secondary)',
+            border: '0.5px solid var(--border)',
             borderRadius: 4,
             padding: '1px 6px',
           }}>
@@ -549,6 +650,64 @@ function ShortcutList() {
           </kbd>
         </div>
       ))}
+    </div>
+  );
+}
+
+// iCloud 同步提示组件
+function ICloudSyncHint({
+  cloudInfo,
+  storagePath,
+  onUseIcloud,
+}: {
+  cloudInfo: CloudSyncInfo | null;
+  storagePath: string;
+  onUseIcloud: () => Promise<void>;
+}) {
+  const { t } = useTranslation();
+
+  // macOS + iCloud 可用：判断是否已在 iCloud 目录
+  if (cloudInfo && cloudInfo.status === 'Available' && cloudInfo.icloud_path) {
+    const alreadyInIcloud = storagePath.startsWith(cloudInfo.icloud_path);
+    if (alreadyInIcloud) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: 'var(--success-color)', display: 'inline-block' }} />
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+            {t('sync.icloudAvailable')}
+          </span>
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+          {t('sync.icloudAvailable')}
+        </span>
+        <button
+          onClick={onUseIcloud}
+          style={{
+            fontSize: 11,
+            color: 'var(--system-blue)',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: 0,
+            textDecoration: 'underline',
+          }}
+        >
+          {t('sync.useIcloud')}
+        </button>
+      </div>
+    );
+  }
+
+  // 非 macOS 或 iCloud 不可用：显示灰色提示
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+        {t('sync.hint')}
+      </span>
     </div>
   );
 }

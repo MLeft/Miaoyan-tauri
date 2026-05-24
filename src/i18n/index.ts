@@ -4,6 +4,7 @@ import en from './en.json';
 import zhHans from './zh-Hans.json';
 import zhHant from './zh-Hant.json';
 import ja from './ja.json';
+import es from './es.json';
 
 i18n.use(initReactI18next).init({
   resources: {
@@ -11,6 +12,7 @@ i18n.use(initReactI18next).init({
     'zh-Hans': { translation: zhHans },
     'zh-Hant': { translation: zhHant },
     ja: { translation: ja },
+    es: { translation: es },
   },
   lng: 'en',
   fallbackLng: 'en',

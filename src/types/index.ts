@@ -7,6 +7,7 @@ export interface NoteMetadata {
   modified_at: string;
   pinned: boolean;
   size: number;
+  is_encrypted: boolean;
 }
 
 export interface NoteContent {
@@ -37,7 +38,15 @@ export interface AppConfig {
   button_display: 'always' | 'hover' | 'hide';
   always_on_top: boolean;
   quick_launch_shortcut: string;
+  preview_width: '600' | '800' | '1000' | '1200' | '1400' | 'full';
+  line_ending: 'lf' | 'crlf';
+  title_font_size: number;
+  presentation_font_size: number;
+  line_height: number;
+  line_spacing: number;
+  letter_spacing: number;
+  image_upload_service: 'none' | 'picgo' | 'upic' | 'picsee' | 'piclist';
 }
 
-export type SortMode = 'modified' | 'created' | 'title';
+export type SortMode = 'modified' | 'created' | 'title' | 'custom';
 export type SortDirection = 'asc' | 'desc';

@@ -25,6 +25,14 @@ const defaultConfig: AppConfig = {
   button_display: 'always',
   always_on_top: false,
   quick_launch_shortcut: '',
+  preview_width: '800',
+  line_ending: 'lf',
+  title_font_size: 20,
+  presentation_font_size: 24,
+  line_height: 1.3,
+  line_spacing: 3.0,
+  letter_spacing: 0.5,
+  image_upload_service: 'none',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

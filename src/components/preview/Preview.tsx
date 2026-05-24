@@ -37,7 +37,7 @@ export function Preview() {
     return () => { if (renderTimer.current) clearTimeout(renderTimer.current); };
   }, [activeContent, activeNote?.id]);
 
-  // Send HTML content + theme to iframe via postMessage
+  // Send HTML content + theme + config to iframe via postMessage
   useEffect(() => {
     if (!iframeReady || !renderedHtml) return;
     const iframe = iframeRef.current;
@@ -46,8 +46,9 @@ export function Preview() {
       type: 'setContent',
       html: renderedHtml,
       isDark,
+      previewWidth: config.preview_width,
     }, '*');
-  }, [renderedHtml, isDark, iframeReady]);
+  }, [renderedHtml, isDark, iframeReady, config.preview_width]);
 
   // Send theme-only update when theme changes without content change
   useEffect(() => {
@@ -59,6 +60,17 @@ export function Preview() {
       isDark,
     }, '*');
   }, [isDark, iframeReady]);
+
+  // Send preview width update to iframe
+  useEffect(() => {
+    if (!iframeReady) return;
+    const iframe = iframeRef.current;
+    if (!iframe?.contentWindow) return;
+    iframe.contentWindow.postMessage({
+      type: 'applyPreviewWidth',
+      previewWidth: config.preview_width,
+    }, '*');
+  }, [config.preview_width, iframeReady]);
 
   // Scroll to line sync (RAF throttled to avoid flooding iframe)
   useEffect(() => {
@@ -134,7 +146,7 @@ export function Preview() {
   if (!activeNote) return null;
 
   return (
-    <div className="h-full overflow-hidden" style={{ backgroundColor: isDark ? '#23282D' : '#FFFFFF' }}>
+    <div className="h-full overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)' }}>
       <iframe
         ref={iframeRef}
         src="/preview.html"

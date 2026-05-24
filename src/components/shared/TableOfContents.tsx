@@ -42,12 +42,19 @@ export function TableOfContents({ onNavigate, onClose }: Props) {
 
   if (headings.length === 0) {
     return (
-      <div className="absolute right-0 top-0 w-64 h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 p-4 shadow-lg z-10">
+      <div
+        className="absolute right-0 top-0 w-64 h-full p-4 z-10"
+        style={{
+          backgroundColor: 'var(--bg-secondary)',
+          borderLeft: '1px solid var(--border)',
+          boxShadow: 'var(--shadow-md)',
+        }}
+      >
         <div className="flex items-center justify-between mb-3">
-          <span className="text-xs font-semibold text-gray-500 uppercase">Contents</span>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm">&times;</button>
+          <span className="text-xs font-semibold uppercase" style={{ color: 'var(--text-tertiary)' }}>Contents</span>
+          <button onClick={onClose} className="text-sm btn-hover-transition" style={{ color: 'var(--text-tertiary)' }}>&times;</button>
         </div>
-        <p className="text-sm text-gray-400">No headings found</p>
+        <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>No headings found</p>
       </div>
     );
   }
@@ -55,18 +62,30 @@ export function TableOfContents({ onNavigate, onClose }: Props) {
   const minLevel = Math.min(...headings.map(h => h.level));
 
   return (
-    <div className="absolute right-0 top-0 w-64 h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-lg z-10 flex flex-col">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-        <span className="text-xs font-semibold text-gray-500 uppercase">Contents</span>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-sm">&times;</button>
+    <div
+      className="absolute right-0 top-0 w-64 h-full z-10 flex flex-col"
+      style={{
+        backgroundColor: 'var(--bg-secondary)',
+        borderLeft: '1px solid var(--border)',
+        boxShadow: 'var(--shadow-md)',
+      }}
+    >
+      <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+        <span className="text-xs font-semibold uppercase" style={{ color: 'var(--text-tertiary)' }}>Contents</span>
+        <button onClick={onClose} className="text-sm btn-hover-transition" style={{ color: 'var(--text-tertiary)' }}>&times;</button>
       </div>
       <div className="flex-1 overflow-y-auto py-2">
         {headings.map((heading, i) => (
           <button
             key={i}
             onClick={() => onNavigate(heading.line)}
-            className="w-full text-left px-4 py-1 text-sm hover:bg-gray-100 dark:hover:bg-gray-800 truncate transition-colors text-gray-700 dark:text-gray-300"
-            style={{ paddingLeft: `${(heading.level - minLevel) * 16 + 16}px` }}
+            className="w-full text-left px-4 py-1 text-sm truncate btn-hover-transition"
+            style={{
+              paddingLeft: `${(heading.level - minLevel) * 16 + 16}px`,
+              color: 'var(--text-primary)',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
             title={heading.text}
           >
             {heading.text}

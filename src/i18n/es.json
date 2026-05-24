@@ -1,0 +1,151 @@
+{
+  "app": {
+    "name": "MiaoYan",
+    "loading": "Cargando...",
+    "selectFolder": "Seleccionar carpeta de notas",
+    "subtitle": "Un editor de Markdown ligero"
+  },
+  "sidebar": {
+    "folders": "Carpetas",
+    "allNotes": "Todas las notas",
+    "newFolder": "Nombre de la nueva carpeta:"
+  },
+  "notesList": {
+    "search": "Buscar...",
+    "noResults": "Sin resultados",
+    "noNotes": "Sin notas aún",
+    "empty": "Sin notas aún",
+    "notes": "notas",
+    "newNote": "Nueva nota"
+  },
+  "sort": {
+    "modified": "Modificado",
+    "created": "Creado",
+    "title": "Título",
+    "custom": "Personalizado"
+  },
+  "editor": {
+    "selectNote": "Selecciona una nota o crea una nueva"
+  },
+  "toolbar": {
+    "toggleSidebar": "Alternar barra lateral",
+    "toggleNotesList": "Alternar lista de notas",
+    "edit": "Editar",
+    "split": "Dividido",
+    "view": "Ver",
+    "toc": "Índice de contenidos",
+    "presentation": "Presentación",
+    "settings": "Configuración",
+    "export": "Exportar",
+    "format": "Formato",
+    "newNote": "Nueva nota"
+  },
+  "settings": {
+    "title": "Configuración",
+    "general": "Interfaz",
+    "editor": "Experiencia",
+    "preview": "Editor",
+    "shortcuts": "Atajos",
+    "storagePath": "Ruta de almacenamiento",
+    "theme": "Tema",
+    "language": "Idioma",
+    "fontFamily": "Familia tipográfica",
+    "fontSize": "Tamaño de fuente",
+    "autoSaveInterval": "Intervalo de autoguardado",
+    "splitMode": "Modo de edición",
+    "previewFont": "Fuente de vista previa",
+    "previewFontSize": "Tamaño de fuente de vista previa",
+    "codeFont": "Fuente de código",
+    "change": "Cambiar",
+    "notSet": "Sin establecer",
+    "themeSystem": "Sistema",
+    "themeLight": "Claro",
+    "themeDark": "Oscuro",
+    "editorOnly": "Solo editor",
+    "splitView": "Vista dividida",
+    "previewOnly": "Solo vista previa",
+    "buttonDisplay": "Mostrar botones",
+    "buttonAlways": "Siempre",
+    "buttonHover": "Al pasar el cursor",
+    "buttonHide": "Ocultar",
+    "alwaysOnTop": "Siempre encima",
+    "yes": "Sí",
+    "no": "No",
+    "quickLaunch": "Inicio rápido",
+    "clear": "Limpiar",
+    "imageUploadService": "Servicio de carga de imágenes",
+    "imageUploadNone": "Ninguno (local)"
+  },
+  "contextMenu": {
+    "pin": "Fijar",
+    "unpin": "Desfijar",
+    "rename": "Renombrar",
+    "delete": "Eliminar",
+    "openInFinder": "Mostrar en el gestor de archivos",
+    "duplicate": "Duplicar"
+  },
+  "export": {
+    "pdf": "PDF",
+    "html": "HTML",
+    "image": "Imagen (PNG)",
+    "markdown": "Markdown"
+  },
+  "version": {
+    "title": "Historial de versiones",
+    "restore": "Restaurar esta versión",
+    "noVersions": "Sin historial de versiones"
+  },
+  "backlinks": {
+    "title": "Enlaces inversos",
+    "empty": "Sin enlaces inversos"
+  },
+  "shortcuts": {
+    "newNote": "Nueva nota",
+    "search": "Buscar",
+    "toggleSidebar": "Alternar barra lateral",
+    "toggleNotesList": "Alternar lista de notas",
+    "togglePreview": "Alternar vista previa",
+    "cycleViewMode": "Cambiar modo de vista",
+    "presentation": "Modo presentación",
+    "settings": "Configuración",
+    "bold": "Negrita",
+    "italic": "Cursiva",
+    "underline": "Subrayado",
+    "strikethrough": "Tachado",
+    "link": "Insertar enlace",
+    "codeBlock": "Bloque de código",
+    "format": "Dar formato al documento",
+    "export": "Exportar"
+  },
+  "update": {
+    "title": "Actualización disponible",
+    "current": "Actual:",
+    "new": "Nueva:",
+    "changelog": "Registro de cambios",
+    "install": "Instalar ahora",
+    "later": "Más tarde",
+    "skip": "Omitir esta versión",
+    "downloading": "Descargando...",
+    "ready": "Listo para instalar"
+  },
+  "sync": {
+    "icloudAvailable": "Sincronización iCloud disponible",
+    "useIcloud": "Usar iCloud Drive",
+    "synced": "Sincronizado",
+    "syncing": "Sincronizando...",
+    "unavailable": "Sincronización no disponible",
+    "hint": "Establece la ruta de almacenamiento en una carpeta en la nube para sincronizar"
+  },
+  "encryption": {
+    "unlock": "Desbloquear nota",
+    "encrypt": "Cifrar nota",
+    "removeEncryption": "Eliminar cifrado",
+    "password": "Contraseña",
+    "confirmPassword": "Confirmar contraseña",
+    "warning": "Advertencia: La contraseña no se puede recuperar si se pierde",
+    "wrongPassword": "Contraseña incorrecta",
+    "success": "Cifrado aplicado",
+    "removed": "Cifrado eliminado",
+    "mismatch": "Las contraseñas no coinciden"
+  }
+}

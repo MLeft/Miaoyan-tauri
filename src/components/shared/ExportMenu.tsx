@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNotesStore } from '../../stores/notes-store';
 import { parseMarkdown } from '../../services/tauri-bridge';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -6,9 +7,11 @@ import { writeTextFile } from '@tauri-apps/plugin-fs';
 
 interface Props {
   onClose: () => void;
+  showToast: (message: string) => void;
 }
 
-export function ExportMenu({ onClose }: Props) {
+export function ExportMenu({ onClose, showToast }: Props) {
+  const { t } = useTranslation();
   const { activeNote, activeContent } = useNotesStore();
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -22,6 +25,12 @@ export function ExportMenu({ onClose }: Props) {
     return () => document.removeEventListener('mousedown', handler);
   }, [onClose]);
 
+  const getExportFilename = (title: string, ext: string) => {
+    const now = new Date();
+    const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}-${String(now.getSeconds()).padStart(2,'0')}`;
+    return `${title}_${ts}.${ext}`;
+  };
+
   const exportHtml = async () => {
     if (!activeNote || !activeContent) return;
     try {
@@ -29,29 +38,96 @@ export function ExportMenu({ onClose }: Props) {
       const fullHtml = `<!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>${activeNote.title}</title>
-<style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 800px; margin: 0 auto; padding: 40px 20px; line-height: 1.7; color: #1a1a1a; }
-h1, h2, h3, h4, h5, h6 { margin-top: 24px; margin-bottom: 16px; font-weight: 600; }
-h1 { font-size: 2em; border-bottom: 1px solid #e1e4e8; padding-bottom: 0.3em; }
-h2 { font-size: 1.5em; border-bottom: 1px solid #e1e4e8; padding-bottom: 0.3em; }
-code { background: #f6f8fa; border-radius: 4px; padding: 0.2em 0.4em; font-size: 0.85em; }
-pre { background: #f6f8fa; border-radius: 6px; padding: 16px; overflow-x: auto; }
-pre code { background: transparent; padding: 0; }
-blockquote { border-left: 4px solid #e1e4e8; padding: 0 16px; color: #656d76; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid #e1e4e8; padding: 8px 12px; }
-th { background: #f6f8fa; }
-img { max-width: 100%; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <style>
+    :root { --bg-color: #FFFFFF; --text-color: #262626; --code-bg: #f7f7f7; --diagram-bg: #f7f7f7; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg-color: #23282D; --text-color: #E7E9EA; --code-bg: #282e33; --diagram-bg: #282e33; }
+    }
+    html, body { background: var(--bg-color); color: var(--text-color); margin: 0; padding: 0; }
+    img { max-width: 100%; height: auto; image-rendering: auto; color-scheme: only light; }
+  </style>
+  <base href="https://cdn.miaoyan.app/Resources/DownView.bundle/">
+  <link rel="stylesheet" href="css/typography.css" />
+  <link rel="stylesheet" href="css/katex.min.css" />
+  <link rel="stylesheet" href="css/tocbot.css" />
+  <link rel="stylesheet" href="css/theme-light.css" />
+  <link rel="stylesheet" href="css/theme-dark.css" />
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/diagrams.css" />
+  <script defer src="js/highlight.min.js"></script>
+  <script defer src="js/mermaid.min.js"></script>
+  <script defer src="js/plantuml-encoder.min.js"></script>
+  <script defer src="js/katex.min.js"></script>
+  <script defer src="js/auto-render.min.js"></script>
+  <script defer src="js/emoji.min.js"></script>
+  <script defer src="js/d3.min.js"></script>
+  <script>this.markmap = this.markmap || {}; this.markmap.autoLoader = { manual: true };</script>
+  <script defer src="js/markmap.min.js"></script>
+  <script defer src="js/markmap-view.min.js"></script>
+  <script defer src="js/lightense.min.js"></script>
+  <script defer src="js/tocbot.min.js"></script>
+  <script defer src="js/theme-config.js"></script>
+  <script defer src="js/common.js"></script>
+  <script defer src="js/theme-manager.js"></script>
+  <script defer src="js/diagram-handler.js"></script>
+  <script defer src="js/app.js"></script>
+  <title>${activeNote.title}</title>
+  <style>
+    @font-face {
+      font-family: 'TsangerJinKai02-W04';
+      font-display: fallback;
+      src: url('https://cdn.miaoyan.app/Resources/Fonts/TsangerJinKai02-W04.ttf') format('truetype');
+    }
+    html { font-size: 16px; padding-top: 24px; }
+    :root { --text-font: "TsangerJinKai02-W04", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; --code-text-font: "Menlo", SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New", monospace; }
+    #write { max-width: 760px; margin: 0 auto; }
+  </style>
 </head>
-<body>${html}</body>
+<body>
+  <div class="markdown-body heti" id="write">
+    <h1>${activeNote.title}</h1>
+    ${html}
+  </div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.MiaoYanCommon) {
+        MiaoYanCommon.initializeCore();
+        MiaoYanCommon.onDOMReady(function() {
+          MiaoYanCommon.setupHeaderAnchors();
+          MiaoYanCommon.optimizeImages();
+          MiaoYanCommon.setupImageZoom();
+          if (window.DiagramHandler) {
+            DiagramHandler.initializeAll();
+          }
+          if (window.renderMathInElement) {
+            var renderMath = function() {
+              renderMathInElement(document.body, {
+                delimiters: [
+                  { left: "$$", right: "$$", display: true },
+                  { left: "$", right: "$", display: false }
+                ],
+                processEscapes: true
+              });
+            };
+            if ('requestIdleCallback' in window) {
+              requestIdleCallback(renderMath, { timeout: 200 });
+            } else {
+              setTimeout(renderMath, 0);
+            }
+          }
+        });
+      }
+    });
+  </script>
+</body>
 </html>`;
 
       const path = await save({
         filters: [{ name: 'HTML', extensions: ['html'] }],
-        defaultPath: `${activeNote.title}.html`,
+        defaultPath: getExportFilename(activeNote.title, 'html'),
       });
       if (path) {
         await writeTextFile(path, fullHtml);
@@ -67,7 +143,7 @@ img { max-width: 100%; }
     try {
       const path = await save({
         filters: [{ name: 'Markdown', extensions: ['md'] }],
-        defaultPath: `${activeNote.title}.md`,
+        defaultPath: getExportFilename(activeNote.title, 'md'),
       });
       if (path) {
         await writeTextFile(path, activeContent);
@@ -78,22 +154,34 @@ img { max-width: 100%; }
     onClose();
   };
 
+
   return (
     <div
       ref={menuRef}
-      className="absolute right-4 top-12 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50 min-w-36"
+      className="absolute right-4 top-12 rounded-lg px-1 py-1 z-50 min-w-40 dialog-content"
+      style={{
+        backgroundColor: 'var(--bg-secondary)',
+        border: '1px solid var(--border)',
+        boxShadow: 'var(--shadow-md)',
+      }}
     >
       <button
         onClick={exportHtml}
-        className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+        className="w-full text-left text-sm rounded-md btn-hover-transition"
+        style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
+        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
       >
-        Export as HTML
+        {t('export.html')}
       </button>
       <button
         onClick={exportMarkdown}
-        className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+        className="w-full text-left text-sm rounded-md btn-hover-transition"
+        style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
+        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
       >
-        Export as Markdown
+        {t('export.markdown')}
       </button>
     </div>
   );

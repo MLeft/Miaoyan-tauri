@@ -25,13 +25,12 @@ export function Toast({ message, visible, onClose, duration = 2000 }: ToastProps
 
   return (
     <div
-      className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm shadow-lg z-50 transition-all duration-300"
+      className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm shadow-lg z-50 dialog-enter"
       style={{
-        backgroundColor: 'var(--bg-tertiary)',
-        color: 'var(--text-secondary)',
+        backgroundColor: 'var(--toast-bg)',
+        color: 'var(--toast-text)',
         opacity: show ? 1 : 0,
         transform: `translate(-50%, ${show ? 0 : 10}px)`,
-        border: '1px solid var(--border)',
       }}
     >
       {message}
