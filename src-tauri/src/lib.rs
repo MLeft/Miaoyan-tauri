@@ -22,14 +22,16 @@ pub fn run() {
                 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
                 let shortcut = Shortcut::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyM);
-                app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
+                if let Err(e) = app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
                     }
-                })?;
+                }) {
+                    eprintln!("Warning: failed to register global shortcut Alt+Meta+M: {e}");
+                }
             }
             Ok(())
         })

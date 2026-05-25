@@ -1,4 +1,3 @@
-import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNotesStore } from '../../stores/notes-store';
 import { parseMarkdown } from '../../services/tauri-bridge';
@@ -13,17 +12,6 @@ interface Props {
 export function ExportMenu({ onClose, showToast }: Props) {
   const { t } = useTranslation();
   const { activeNote, activeContent } = useNotesStore();
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [onClose]);
 
   const getExportFilename = (title: string, ext: string) => {
     const now = new Date();
@@ -156,33 +144,38 @@ export function ExportMenu({ onClose, showToast }: Props) {
 
 
   return (
-    <div
-      ref={menuRef}
-      className="absolute right-4 top-12 rounded-lg px-1 py-1 z-50 min-w-40 dialog-content"
-      style={{
-        backgroundColor: 'var(--bg-secondary)',
-        border: '1px solid var(--border)',
-        boxShadow: 'var(--shadow-md)',
-      }}
-    >
-      <button
-        onClick={exportHtml}
-        className="w-full text-left text-sm rounded-md btn-hover-transition"
-        style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
-        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+    <>
+      <div
+        className="fixed inset-0 z-40"
+        onPointerDown={onClose}
+      />
+      <div
+        className="absolute right-4 top-12 rounded-lg px-1 py-1 z-50 min-w-40 dialog-content"
+        style={{
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px solid var(--border)',
+          boxShadow: 'var(--shadow-md)',
+        }}
       >
-        {t('export.html')}
-      </button>
-      <button
-        onClick={exportMarkdown}
-        className="w-full text-left text-sm rounded-md btn-hover-transition"
-        style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
-        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-      >
-        {t('export.markdown')}
-      </button>
-    </div>
+        <button
+          onClick={exportHtml}
+          className="w-full text-left text-sm rounded-md btn-hover-transition"
+          style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+        >
+          {t('export.html')}
+        </button>
+        <button
+          onClick={exportMarkdown}
+          className="w-full text-left text-sm rounded-md btn-hover-transition"
+          style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+        >
+          {t('export.markdown')}
+        </button>
+      </div>
+    </>
   );
 }
