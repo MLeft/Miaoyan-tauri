@@ -13,9 +13,9 @@ function resolveImageUrl(rawPath: string, notePath: string | null): string {
   if (!notePath) return rawPath;
 
   // notePath is the full path to the .md file; derive parent directory
-  const lastSlash = notePath.lastIndexOf('/');
+  const lastSlash = Math.max(notePath.lastIndexOf('/'), notePath.lastIndexOf('\\'));
   const noteDir = lastSlash >= 0 ? notePath.slice(0, lastSlash) : notePath;
-  const absolutePath = `${noteDir}/${rawPath}`;
+  const absolutePath = `${noteDir}/${rawPath}`.replace(/\\/g, '/');
   return convertFileSrc(absolutePath);
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { EditorState, Compartment } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -9,6 +9,7 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { useNotesStore } from '../../stores/notes-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import { useEditorStore } from '../../stores/editor-store';
+import { renameNote } from '../../services/tauri-bridge';
 import { smartListKeymap } from './extensions/smart-lists';
 import { textFormattingKeymap, wrapSelection, toggleUnorderedList, toggleOrderedList, toggleTodoList, insertLink, insertImage, insertCodeBlock } from './extensions/text-formatting';
 import { tabSnippets } from './extensions/tab-snippets';
@@ -34,9 +35,8 @@ function getEditorTheme(isDark: boolean, config: { line_height: number; line_spa
       letterSpacing: `${config.letter_spacing}px`,
     },
     '.cm-line': {
-      padding: '0 20px',
+      padding: `0 20px ${config.line_spacing}px 20px`,
       lineHeight: String(config.line_height),
-      marginBottom: `${config.line_spacing}px`,
     },
     '.cm-gutters': {
       backgroundColor: 'transparent',
@@ -93,13 +93,14 @@ function getEditorTheme(isDark: boolean, config: { line_height: number; line_spa
 export function Editor() {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const { activeNote, activeContent, updateContent } = useNotesStore();
+  const { activeNote, activeContent, updateContent, refreshNotes } = useNotesStore();
   const { config } = useSettingsStore();
   const { setEditorScrollLine } = useEditorStore();
   // Suppress editor→preview sync while preview is driving editor scroll
   const suppressEditorSync = useRef(false);
   const scrollRafRef = useRef<number | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
+  const [title, setTitle] = useState('');
 
   const isDark = config.theme === 'dark' ||
     (config.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -250,6 +251,30 @@ export function Editor() {
     }
   };
 
+  // Sync title state when activeNote changes
+  useEffect(() => {
+    setTitle(activeNote?.title ?? '');
+  }, [activeNote?.title]);
+
+  const handleTitleCommit = useCallback(async () => {
+    const trimmed = title.trim();
+    if (!trimmed || !activeNote || trimmed === activeNote.title) return;
+    try {
+      await renameNote(activeNote.path, trimmed);
+      await refreshNotes(config.storage_path);
+    } catch (err) {
+      console.error('Failed to rename note:', err);
+      setTitle(activeNote.title);
+    }
+  }, [title, activeNote, config.storage_path, refreshNotes]);
+
+  const handleTitleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      (e.target as HTMLInputElement).blur();
+    }
+  }, []);
+
   if (!activeNote) {
     return (
       <div className="h-full flex items-center justify-center empty-state" style={{ backgroundColor: 'var(--bg-secondary)' }}>
@@ -262,8 +287,23 @@ export function Editor() {
   }
 
   return (
-    <div className="h-full overflow-hidden relative" onContextMenu={handleContextMenu}>
-      <div className="h-full" ref={editorRef} />
+    <div className="h-full overflow-hidden relative flex flex-col" onContextMenu={handleContextMenu}>
+      {/* Title editor */}
+      <input
+        type="text"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onBlur={handleTitleCommit}
+        onKeyDown={handleTitleKeyDown}
+        className="w-full border-none bg-transparent outline-none"
+        style={{
+          fontSize: '18px',
+          fontWeight: 600,
+          padding: '12px 20px',
+          color: 'var(--text-primary)',
+        }}
+      />
+      <div className="flex-1 overflow-hidden" ref={editorRef} />
       <ContextMenu
         x={contextMenu.x}
         y={contextMenu.y}

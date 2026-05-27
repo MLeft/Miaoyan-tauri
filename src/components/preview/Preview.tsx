@@ -3,6 +3,25 @@ import { useNotesStore } from '../../stores/notes-store';
 import { useEditorStore } from '../../stores/editor-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import { parseMarkdown } from '../../services/tauri-bridge';
+import { convertFileSrc } from '@tauri-apps/api/core';
+
+function resolveImagePaths(html: string, notePath: string): string {
+  // 获取笔记所在目录（处理 Windows 和 Unix 路径）
+  const lastSlash = Math.max(notePath.lastIndexOf('/'), notePath.lastIndexOf('\\'));
+  const noteDir = lastSlash >= 0 ? notePath.substring(0, lastSlash) : notePath;
+
+  return html.replace(/(<img[^>]*\ssrc=["'])([^"']+)(["'])/gi, (match, prefix, src, suffix) => {
+    // 跳过绝对 URL、data URI、已转换的 asset URL
+    if (src.startsWith('http://') || src.startsWith('https://') ||
+        src.startsWith('data:') || src.startsWith('asset://') ||
+        src.startsWith('/')) {
+      return match;
+    }
+    // 相对路径 -> 绝对路径 -> asset URL
+    const absolutePath = `${noteDir}/${src}`.replace(/\\/g, '/');
+    return `${prefix}${convertFileSrc(absolutePath)}${suffix}`;
+  });
+}
 
 export function Preview() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -42,9 +61,10 @@ export function Preview() {
     if (!iframeReady || !renderedHtml) return;
     const iframe = iframeRef.current;
     if (!iframe?.contentWindow) return;
+    const processedHtml = activeNote ? resolveImagePaths(renderedHtml, activeNote.path) : renderedHtml;
     iframe.contentWindow.postMessage({
       type: 'setContent',
-      html: renderedHtml,
+      html: processedHtml,
       isDark,
       previewWidth: config.preview_width,
     }, '*');
