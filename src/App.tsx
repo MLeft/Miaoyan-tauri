@@ -229,7 +229,7 @@ function EditorPane() {
 
   return (
     <div className="h-full flex flex-col relative">
-      <div className="flex-1 relative">
+      <div className="flex-1 relative min-h-0 overflow-hidden">
         {viewMode === 'split' ? (
           <Allotment>
             <Allotment.Pane minSize={300}>
@@ -240,9 +240,13 @@ function EditorPane() {
             </Allotment.Pane>
           </Allotment>
         ) : viewMode === 'preview' ? (
-          <Preview />
+          <div className="h-full">
+            <Preview />
+          </div>
         ) : (
-          <Editor />
+          <div className="h-full">
+            <Editor />
+          </div>
         )}
         {showToc && <TableOfContents onNavigate={handleTocNavigate} onClose={toggleToc} />}
       </div>

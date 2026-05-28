@@ -572,40 +572,41 @@ export function CombinedSidebar() {
       {/* Context Menu */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] border rounded-lg shadow-lg py-1 min-w-[130px] dialog-content"
-          style={{ left: contextMenu.x, top: contextMenu.y, backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+          className="fixed z-[9999] rounded-lg px-1 py-1 min-w-[140px] dialog-content"
+          style={{ left: contextMenu.x, top: contextMenu.y, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-md)' }}
+          onMouseDown={(e) => e.stopPropagation()}
         >
-          <button onClick={handlePin} className="w-full text-left px-3 py-1 text-xs transition-colors"
-            style={{ color: 'var(--text-primary)' }}
+          <button onClick={handlePin} className="w-full text-left text-sm rounded-md btn-hover-transition"
+            style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
             {contextMenu.note.pinned ? t('contextMenu.unpin') : t('contextMenu.pin')}
           </button>
-          <button onClick={handleStartRename} className="w-full text-left px-3 py-1 text-xs transition-colors"
-            style={{ color: 'var(--text-primary)' }}
+          <button onClick={handleStartRename} className="w-full text-left text-sm rounded-md btn-hover-transition"
+            style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
             {t('contextMenu.rename')}
           </button>
           <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
           {contextMenu.note.is_encrypted ? (
-            <button onClick={handleRemoveEncryption} className="w-full text-left px-3 py-1 text-xs transition-colors"
-              style={{ color: 'var(--text-primary)' }}
+            <button onClick={handleRemoveEncryption} className="w-full text-left text-sm rounded-md btn-hover-transition"
+              style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
               onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
               {t('encryption.removeEncryption')}
             </button>
           ) : (
-            <button onClick={handleEncryptNote} className="w-full text-left px-3 py-1 text-xs transition-colors"
-              style={{ color: 'var(--text-primary)' }}
+            <button onClick={handleEncryptNote} className="w-full text-left text-sm rounded-md btn-hover-transition"
+              style={{ color: 'var(--text-primary)', padding: '6px 20px' }}
               onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
               {t('encryption.encrypt')}
             </button>
           )}
           <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
-          <button onClick={handleDelete} className="w-full text-left px-3 py-1 text-xs transition-colors"
-            style={{ color: 'var(--danger-color)' }}
+          <button onClick={handleDelete} className="w-full text-left text-sm rounded-md btn-hover-transition"
+            style={{ color: 'var(--danger-color)', padding: '6px 20px' }}
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
             {t('contextMenu.delete')}

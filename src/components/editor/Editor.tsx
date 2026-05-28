@@ -303,7 +303,7 @@ export function Editor() {
           color: 'var(--text-primary)',
         }}
       />
-      <div className="flex-1 overflow-hidden" ref={editorRef} />
+      <div className="flex-1 min-h-0" ref={editorRef} />
       <ContextMenu
         x={contextMenu.x}
         y={contextMenu.y}

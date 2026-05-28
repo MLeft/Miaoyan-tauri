@@ -26,7 +26,7 @@ function resolveImagePaths(html: string, notePath: string): string {
 export function Preview() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { activeContent, activeNote } = useNotesStore();
-  const { editorScrollLine } = useEditorStore();
+  const { editorScrollLine, viewMode } = useEditorStore();
   const { config } = useSettingsStore();
   const [renderedHtml, setRenderedHtml] = useState('');
   const [iframeReady, setIframeReady] = useState(false);
@@ -66,9 +66,9 @@ export function Preview() {
       type: 'setContent',
       html: processedHtml,
       isDark,
-      previewWidth: config.preview_width,
+      previewWidth: viewMode === 'preview' ? 'full' : config.preview_width,
     }, '*');
-  }, [renderedHtml, isDark, iframeReady, config.preview_width]);
+  }, [renderedHtml, isDark, iframeReady, config.preview_width, viewMode]);
 
   // Send theme-only update when theme changes without content change
   useEffect(() => {
@@ -88,9 +88,9 @@ export function Preview() {
     if (!iframe?.contentWindow) return;
     iframe.contentWindow.postMessage({
       type: 'applyPreviewWidth',
-      previewWidth: config.preview_width,
+      previewWidth: viewMode === 'preview' ? 'full' : config.preview_width,
     }, '*');
-  }, [config.preview_width, iframeReady]);
+  }, [config.preview_width, viewMode, iframeReady]);
 
   // Scroll to line sync (RAF throttled to avoid flooding iframe)
   useEffect(() => {
