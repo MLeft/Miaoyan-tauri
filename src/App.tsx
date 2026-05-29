@@ -558,7 +558,7 @@ export default function App() {
       />
       <div className="flex-1 overflow-hidden relative">
         <Allotment>
-          <Allotment.Pane minSize={100} preferredSize={140} maxSize={200} visible={config.show_sidebar}>
+          <Allotment.Pane minSize={140} preferredSize={180} maxSize={240} visible={config.show_sidebar}>
             <FolderPane />
           </Allotment.Pane>
           <Allotment.Pane minSize={180} preferredSize={240} maxSize={320} visible={config.show_sidebar || config.show_notes_list}>
