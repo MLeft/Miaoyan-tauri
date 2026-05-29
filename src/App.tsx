@@ -557,11 +557,11 @@ export default function App() {
         onNewNote={handleNewNote}
       />
       <div className="flex-1 overflow-hidden relative">
-        <Allotment>
-          <Allotment.Pane minSize={140} preferredSize={180} maxSize={240} visible={config.show_sidebar}>
+        <Allotment key={`${config.show_sidebar}-${config.show_notes_list}`}>
+          <Allotment.Pane minSize={150} preferredSize={150} maxSize={220} visible={config.show_sidebar}>
             <FolderPane />
           </Allotment.Pane>
-          <Allotment.Pane minSize={180} preferredSize={240} maxSize={320} visible={config.show_sidebar || config.show_notes_list}>
+          <Allotment.Pane minSize={180} preferredSize={220} maxSize={280} visible={config.show_sidebar || config.show_notes_list}>
             <NoteListPane />
           </Allotment.Pane>
           <Allotment.Pane minSize={400}>
