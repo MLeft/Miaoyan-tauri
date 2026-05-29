@@ -204,7 +204,7 @@ html, body, #root {
 }
 
 /* Allotment sash - match original 1px divider */
-.sash-container .sash {
+.sash-module_sash__K-9lB {
   background: transparent !important;
 }
 
@@ -281,7 +281,9 @@ code, pre, .font-code {
   pointer-events: none;
 }
 
-.sash-container .sash:hover {
+.sash-module_sash__K-9lB:hover,
+.sash-module_sash__K-9lB.sash-module_hover__80W6I,
+.sash-module_sash__K-9lB.sash-module_active__bJspD {
   background: var(--accent) !important;
   opacity: 0.4;
 }

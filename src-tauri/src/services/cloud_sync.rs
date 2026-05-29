@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum SyncStatus {

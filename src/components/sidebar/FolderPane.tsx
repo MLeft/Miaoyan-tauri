@@ -1,0 +1,151 @@
+import { useState, useCallback } from 'react';
+import type { Project } from '../../types';
+import { useNotesStore } from '../../stores/notes-store';
+import { useSettingsStore } from '../../stores/settings-store';
+import { createFolder } from '../../services/tauri-bridge';
+import { useTranslation } from 'react-i18next';
+
+/* SVG icons */
+const IconHome = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" />
+  </svg>
+);
+
+const IconFolder = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+  </svg>
+);
+
+const IconChevronRight = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="9 18 15 12 9 6" />
+  </svg>
+);
+
+const IconChevronDown = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+const IconPlus = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    <line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" />
+  </svg>
+);
+
+export function FolderPane() {
+  const { t } = useTranslation();
+  const {
+    projects,
+    activeFolder,
+    setActiveFolder,
+    loadProjects,
+    notes,
+  } = useNotesStore();
+  const { config } = useSettingsStore();
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+
+  const toggleFolderExpand = useCallback((path: string) => {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      next.has(path) ? next.delete(path) : next.add(path);
+      return next;
+    });
+  }, []);
+
+  const handleSelectFolder = useCallback((path: string | null) => {
+    setActiveFolder(path, config.storage_path);
+  }, [setActiveFolder, config.storage_path]);
+
+  const handleCreateFolder = useCallback(async () => {
+    const name = prompt(t('sidebar.newFolder'));
+    if (!name) return;
+    const parent = activeFolder || config.storage_path;
+    try {
+      await createFolder(parent, name);
+      await loadProjects(config.storage_path);
+    } catch (e) {
+      console.error('Failed to create folder:', e);
+    }
+  }, [activeFolder, config.storage_path, loadProjects, t]);
+
+  const renderProject = (project: Project, depth = 0) => {
+    const isExpanded = expandedFolders.has(project.path);
+    const isActive = activeFolder === project.path;
+    return (
+      <div key={project.path}>
+        <div
+          className="flex items-center gap-1.5 cursor-pointer text-xs transition-colors"
+          style={{
+            paddingLeft: `${depth * 14 + 10}px`,
+            paddingRight: '10px',
+            height: '28px',
+            color: isActive ? 'var(--accent-icon)' : 'var(--text-secondary)',
+            backgroundColor: isActive ? 'var(--accent-light)' : 'transparent',
+          }}
+          onClick={() => handleSelectFolder(project.path)}
+          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
+          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+        >
+          {project.children.length > 0 ? (
+            <span
+              className="w-3 h-3 flex items-center justify-center flex-shrink-0 opacity-50"
+              onClick={(e) => { e.stopPropagation(); toggleFolderExpand(project.path); }}
+            >
+              {isExpanded ? <IconChevronDown /> : <IconChevronRight />}
+            </span>
+          ) : <span className="w-3 flex-shrink-0" />}
+          <span className="flex-shrink-0 opacity-60"><IconFolder /></span>
+          <span className="truncate">{project.name}</span>
+        </div>
+        {isExpanded && project.children.map((child) => renderProject(child, depth + 1))}
+      </div>
+    );
+  };
+
+  return (
+    <div
+      className="h-full flex flex-col border-r sidebar-transition"
+      style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border)' }}
+    >
+      {/* Folder tree scroll area */}
+      <div className="flex-1 overflow-y-auto">
+        {/* All Notes entry */}
+        <div
+          className="flex items-center cursor-pointer text-[16px] transition-colors"
+          style={{
+            height: '28px',
+            paddingLeft: '10px',
+            paddingRight: '10px',
+            color: activeFolder === null ? 'var(--accent-icon)' : 'var(--text-secondary)',
+            backgroundColor: activeFolder === null ? 'var(--accent-light)' : 'transparent',
+          }}
+          onClick={() => handleSelectFolder(null)}
+          onMouseEnter={(e) => { if (activeFolder !== null) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
+          onMouseLeave={(e) => { if (activeFolder !== null) e.currentTarget.style.backgroundColor = 'transparent'; }}
+        >
+          <span className="flex-shrink-0" style={{ marginRight: '6px' }}><IconHome /></span>
+          <span>{t('sidebar.allNotes')}</span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)', marginLeft: '4px' }}>{notes.length}</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); handleCreateFolder(); }}
+            className="flex-shrink-0 rounded transition-colors"
+            style={{ color: 'var(--text-tertiary)', marginLeft: 'auto' }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+            title={t('sidebar.newFolder')}
+          >
+            <IconPlus />
+          </button>
+        </div>
+
+        {/* Project tree */}
+        {projects.map((project) => renderProject(project))}
+      </div>
+    </div>
+  );
+}
