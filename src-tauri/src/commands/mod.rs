@@ -8,15 +8,29 @@ use crate::services::encryption;
 use uuid::Uuid;
 
 #[command]
-pub fn get_projects(root_path: String) -> Vec<Project> {
-    let path = Path::new(&root_path);
-    storage::scan_projects(path)
+pub fn get_projects(root_path: String, extra_folders: Vec<String>) -> Vec<Project> {
+    let mut projects = storage::scan_projects(Path::new(&root_path));
+    for folder in extra_folders {
+        let p = Path::new(&folder);
+        if p.exists() && p.is_dir() {
+            let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let children = storage::scan_projects(p);
+            projects.push(Project { name, path: folder, children, is_root: false });
+        }
+    }
+    projects
 }
 
 #[command]
-pub fn get_all_notes(root_path: String) -> Vec<NoteMetadata> {
-    let path = Path::new(&root_path);
-    storage::scan_notes(path)
+pub fn get_all_notes(root_path: String, extra_folders: Vec<String>) -> Vec<NoteMetadata> {
+    let mut notes = storage::scan_notes(Path::new(&root_path));
+    for folder in extra_folders {
+        let p = Path::new(&folder);
+        if p.exists() && p.is_dir() {
+            notes.extend(storage::scan_notes(p));
+        }
+    }
+    notes
 }
 
 #[command]
@@ -801,5 +815,38 @@ pub async fn remove_encryption(path: String, password: String) -> Result<(), Str
         .map_err(|e| format!("Failed to write plaintext file: {}", e))?;
     fs::remove_file(&path)
         .map_err(|e| format!("Failed to delete encrypted file: {}", e))?;
+    Ok(())
+}
+
+#[command]
+pub fn move_note(source_path: String, target_folder: String) -> Result<String, String> {
+    let src = Path::new(&source_path);
+    let file_name = src.file_name().ok_or("Invalid source path".to_string())?;
+    let dest = Path::new(&target_folder).join(file_name);
+    if dest.exists() {
+        return Err("Target file already exists".to_string());
+    }
+    fs::rename(&src, &dest)
+        .map_err(|e| format!("Failed to move: {}", e))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+#[command]
+pub fn write_log(storage_path: String, message: String) -> Result<(), String> {
+    let log_dir = Path::new(&storage_path).join(".log");
+    fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("Failed to create log dir: {}", e))?;
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let log_file = log_dir.join(format!("{}.log", today));
+    let timestamp = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+    let line = format!("[{}] {}\n", timestamp, message);
+    use std::io::Write;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .map_err(|e| format!("Failed to open log file: {}", e))?;
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("Failed to write log: {}", e))?;
     Ok(())
 }

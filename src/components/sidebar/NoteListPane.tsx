@@ -93,6 +93,11 @@ function SortableNoteItem({
       ref={setNodeRef}
       style={style}
       className="transition-colors"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/note-path', note.path);
+        e.dataTransfer.effectAllowed = 'move';
+      }}
       onClick={onSelect}
       onContextMenu={onContextMenu}
       {...attributes}
@@ -413,6 +418,11 @@ export function NoteListPane() {
             <div
               key={note.id}
               className="cursor-pointer transition-colors"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('application/note-path', note.path);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
               style={{
                 minHeight: '44px',
                 padding: '6px 10px',

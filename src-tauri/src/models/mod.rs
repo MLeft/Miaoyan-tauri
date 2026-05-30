@@ -65,6 +65,10 @@ pub struct AppConfig {
     pub letter_spacing: f64,
     #[serde(default = "default_image_upload_service")]
     pub image_upload_service: String,
+    #[serde(default)]
+    pub extra_folders: Vec<String>,
+    #[serde(default)]
+    pub debug_log: bool,
 }
 
 impl Default for AppConfig {
@@ -93,6 +97,8 @@ impl Default for AppConfig {
             line_spacing: default_line_spacing(),
             letter_spacing: default_letter_spacing(),
             image_upload_service: default_image_upload_service(),
+            extra_folders: Vec::new(),
+            debug_log: false,
         }
     }
 }

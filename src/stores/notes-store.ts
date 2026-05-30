@@ -33,6 +33,10 @@ interface NotesState {
   encryptionDialog: { visible: boolean; mode: 'unlock' | 'encrypt' | 'remove'; notePath: string } | null;
   activeEncryptionPassword: string | null; // password for currently open encrypted note
 
+  // Temporary file state
+  isTemporaryFile: boolean;
+  openTemporaryFile: (path: string) => Promise<void>;
+
   loadProjects: (rootPath: string) => Promise<void>;
   loadNotes: (rootPath: string) => Promise<void>;
   loadNotesInFolder: (folderPath: string, rootPath: string) => Promise<void>;
@@ -70,9 +74,12 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   encryptionDialog: null,
   activeEncryptionPassword: null,
 
+  isTemporaryFile: false,
+
   loadProjects: async (rootPath) => {
     try {
-      const projects = await getProjects(rootPath);
+      const config = useSettingsStore.getState().config;
+      const projects = await getProjects(rootPath, config.extra_folders || []);
       set({ projects });
     } catch (e) {
       console.error('Failed to load projects:', e);
@@ -82,7 +89,8 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   loadNotes: async (rootPath) => {
     set({ isLoading: true });
     try {
-      const notes = await getAllNotes(rootPath);
+      const config = useSettingsStore.getState().config;
+      const notes = await getAllNotes(rootPath, config.extra_folders || []);
       set({ notes, isLoading: false });
     } catch (e) {
       console.error('Failed to load notes:', e);
@@ -108,7 +116,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       await get().saveCurrentNote();
     }
 
-    set({ activeNote: note, isLoading: true, activeEncryptionPassword: null });
+    set({ activeNote: note, isLoading: true, activeEncryptionPassword: null, isTemporaryFile: false });
 
     // If encrypted, show unlock dialog instead of loading content
     if (note.is_encrypted) {
@@ -266,5 +274,25 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
   clearEncryptionPassword: () => {
     set({ activeEncryptionPassword: null });
+  },
+
+  openTemporaryFile: async (path: string) => {
+    try {
+      const content = await readNote(path);
+      const meta: NoteMetadata = {
+        id: path,
+        title: path.split('/').pop()?.replace('.md', '') || 'Untitled',
+        path,
+        folder: path.substring(0, path.lastIndexOf('/')),
+        created_at: new Date().toISOString(),
+        modified_at: new Date().toISOString(),
+        pinned: false,
+        size: content.content.length,
+        is_encrypted: false,
+      };
+      set({ activeNote: meta, activeContent: content.content, isTemporaryFile: true });
+    } catch (e) {
+      console.error('Failed to open temporary file:', e);
+    }
   },
 }));

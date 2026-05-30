@@ -33,6 +33,8 @@ const defaultConfig: AppConfig = {
   line_spacing: 3.0,
   letter_spacing: 0.5,
   image_upload_service: 'none',
+  extra_folders: [],
+  debug_log: false,
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

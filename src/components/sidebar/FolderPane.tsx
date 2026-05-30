@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import type { Project } from '../../types';
 import { useNotesStore } from '../../stores/notes-store';
 import { useSettingsStore } from '../../stores/settings-store';
-import { createFolder } from '../../services/tauri-bridge';
+import { createFolder, moveNote } from '../../services/tauri-bridge';
 import { useTranslation } from 'react-i18next';
 
 /* SVG icons */
@@ -44,9 +44,10 @@ export function FolderPane() {
     activeFolder,
     setActiveFolder,
     loadProjects,
+    refreshNotes,
     notes,
   } = useNotesStore();
-  const { config } = useSettingsStore();
+  const { config, updateConfig } = useSettingsStore();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   const toggleFolderExpand = useCallback((path: string) => {
@@ -88,6 +89,29 @@ export function FolderPane() {
             backgroundColor: isActive ? 'var(--accent-light)' : 'transparent',
           }}
           onClick={() => handleSelectFolder(project.path)}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!isActive) e.currentTarget.style.backgroundColor = 'var(--accent-light)';
+          }}
+          onDragLeave={(e) => {
+            if (!isActive) e.currentTarget.style.backgroundColor = 'transparent';
+          }}
+          onDrop={async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const notePath = e.dataTransfer.getData('application/note-path');
+            if (notePath) {
+              try {
+                await moveNote(notePath, project.path);
+                await refreshNotes(config.storage_path);
+                await loadProjects(config.storage_path);
+              } catch (err) {
+                console.error('Failed to move note:', err);
+              }
+            }
+            e.currentTarget.style.backgroundColor = isActive ? 'var(--accent-light)' : 'transparent';
+          }}
           onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
           onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
         >
@@ -101,6 +125,23 @@ export function FolderPane() {
           ) : <span className="w-3 flex-shrink-0" />}
           <span className="flex-shrink-0 opacity-60"><IconFolder /></span>
           <span className="truncate">{project.name}</span>
+          {config.extra_folders.includes(project.path) && (
+            <button
+              className="flex-shrink-0 opacity-40 hover:opacity-100 transition-opacity"
+              style={{ marginLeft: 'auto', padding: '0 2px' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                const newFolders = config.extra_folders.filter(f => f !== project.path);
+                useSettingsStore.getState().updateConfig({ extra_folders: newFolders });
+                loadProjects(config.storage_path);
+                refreshNotes(config.storage_path);
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
         </div>
         {isExpanded && project.children.map((child) => renderProject(child, depth + 1))}
       </div>

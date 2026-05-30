@@ -397,6 +397,19 @@ export function SettingsDialog({ onClose }: Props) {
                     ]}
                   />
                 </Row>
+
+                <Separator />
+
+                <Row label={`${t('settings.debugLog')}:`}>
+                  <MacSelect
+                    value={config.debug_log ? 'yes' : 'no'}
+                    onChange={(v) => updateConfig({ debug_log: v === 'yes' })}
+                    options={[
+                      { value: 'yes', label: t('settings.yes') },
+                      { value: 'no', label: t('settings.no') },
+                    ]}
+                  />
+                </Row>
               </div>
             )}
 

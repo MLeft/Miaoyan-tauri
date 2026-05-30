@@ -46,6 +46,8 @@ export interface AppConfig {
   line_spacing: number;
   letter_spacing: number;
   image_upload_service: 'none' | 'picgo' | 'upic' | 'picsee' | 'piclist';
+  extra_folders: string[];
+  debug_log: boolean;
 }
 
 export type SortMode = 'modified' | 'created' | 'title' | 'custom';

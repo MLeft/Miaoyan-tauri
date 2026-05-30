@@ -132,10 +132,18 @@ fn build_note_metadata(path: &Path, root_path: &Path) -> Option<NoteMetadata> {
             .trim_end_matches(".md")
             .to_string()
     } else {
-        path.file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string()
+        let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+        if ext == "md" || ext == "markdown" {
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        } else {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        }
     };
     
     let folder = path.parent()

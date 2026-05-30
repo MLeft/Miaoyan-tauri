@@ -86,7 +86,8 @@
     "presentationFontSize": "演示字号",
     "lineHeight": "行高",
     "imageUploadService": "图片上传服务",
-    "imageUploadNone": "无（本地保存）"
+    "imageUploadNone": "无（本地保存）",
+    "debugLog": "调试日志"
   },
   "contextMenu": {
     "pin": "置顶",
@@ -169,5 +170,8 @@
     "success": "加密已应用",
     "removed": "加密已移除",
     "mismatch": "两次密码不一致"
+  },
+  "toast": {
+    "unsupportedFile": "不支持的文件格式"
   }
 }

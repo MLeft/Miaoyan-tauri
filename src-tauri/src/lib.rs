@@ -69,6 +69,8 @@ pub fn run() {
             verify_password,
             save_encrypted_note,
             remove_encryption,
+            move_note,
+            write_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

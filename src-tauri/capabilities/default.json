@@ -33,6 +33,10 @@
     {
       "identifier": "fs:allow-write-file",
       "allow": [{ "path": "$HOME/**" }]
+    },
+    {
+      "identifier": "fs:allow-stat",
+      "allow": [{ "path": "**" }]
     }
   ]
 }

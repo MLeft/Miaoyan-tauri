@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { stat } from '@tauri-apps/plugin-fs';
 import { useTranslation } from 'react-i18next';
 import { Allotment } from 'allotment';
 import 'allotment/dist/style.css';
@@ -17,6 +19,7 @@ import { NoteListPane } from './components/sidebar/NoteListPane';
 import { formatMarkdown } from './services/formatter';
 import { createNote, createFolder, setAlwaysOnTop, writeNote } from './services/tauri-bridge';
 import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
+import { log } from './services/logger';
 import { useNotesStore } from './stores/notes-store';
 import { useSettingsStore } from './stores/settings-store';
 import { useEditorStore } from './stores/editor-store';
@@ -298,6 +301,7 @@ function WelcomeScreen() {
 }
 
 export default function App() {
+  const { t } = useTranslation();
   const { config, loaded, loadConfig } = useSettingsStore();
   const { loadProjects, loadNotes } = useNotesStore();
   const [themeClass, setThemeClass] = useState('');
@@ -448,6 +452,66 @@ export default function App() {
       setAlwaysOnTop(config.always_on_top).catch(console.error);
     }
   }, [config.always_on_top, loaded]);
+
+  // 窗口级文件拖放
+  const BINARY_EXTENSIONS = new Set([
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico',
+    '.mp3', '.mp4', '.mov', '.avi', '.mkv', '.wav', '.flac',
+    '.zip', '.tar', '.gz', '.rar', '.7z',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.exe', '.dmg', '.app', '.dylib', '.so', '.dll',
+  ]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWebview().onDragDropEvent(async (event) => {
+      if (event.payload.type === 'drop') {
+        const paths = [...new Set(event.payload.paths)];
+        log(`Drop paths: ${JSON.stringify(paths)}`);
+        for (const path of paths) {
+          try {
+            log(`Processing path: ${path}`);
+            const info = await stat(path);
+            log(`stat result: isDirectory=${info.isDirectory}`);
+            if (info.isDirectory) {
+              const current = useSettingsStore.getState().config;
+              if (!current.extra_folders.includes(path)) {
+                await useSettingsStore.getState().updateConfig({
+                  extra_folders: [...current.extra_folders, path]
+                });
+                await useNotesStore.getState().loadProjects(current.storage_path);
+                log(`Added extra folder: ${path}`);
+              }
+            } else {
+              const dotIdx = path.lastIndexOf('.');
+              const ext = dotIdx >= 0 ? path.substring(dotIdx).toLowerCase() : '';
+              if (ext && BINARY_EXTENSIONS.has(ext)) {
+                setToastMessage(t('toast.unsupportedFile'));
+                setToastVisible(true);
+                log(`Unsupported binary file: ${path}`);
+              } else {
+                const folder = path.substring(0, path.lastIndexOf('/'));
+                const current = useSettingsStore.getState().config;
+                if (!folder.startsWith(current.storage_path) && !current.extra_folders.includes(folder)) {
+                  await useSettingsStore.getState().updateConfig({
+                    extra_folders: [...current.extra_folders, folder]
+                  });
+                }
+                await useNotesStore.getState().loadProjects(current.storage_path);
+                useNotesStore.getState().setActiveFolder(folder, current.storage_path);
+                useNotesStore.getState().openTemporaryFile(path);
+                log(`Added folder ${folder} and opened file: ${path}`);
+              }
+            }
+          } catch (e) {
+            log(`Drop error for ${path}: ${e}`);
+            console.error('Drop handling error:', e);
+          }
+        }
+      }
+    }).then(fn => { unlisten = fn; log('DragDrop listener registered'); }).catch(e => { log(`DragDrop listener registration FAILED: ${e}`); });
+    return () => { unlisten?.(); };
+  }, []);
 
   // Deep-link handler
   useEffect(() => {

@@ -1,12 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { NoteMetadata, NoteContent, Project, AppConfig } from '../types';
 
-export async function getProjects(rootPath: string): Promise<Project[]> {
-  return invoke('get_projects', { rootPath });
+export async function getProjects(rootPath: string, extraFolders: string[] = []): Promise<Project[]> {
+  return invoke('get_projects', { rootPath, extraFolders });
 }
 
-export async function getAllNotes(rootPath: string): Promise<NoteMetadata[]> {
-  return invoke('get_all_notes', { rootPath });
+export async function getAllNotes(rootPath: string, extraFolders: string[] = []): Promise<NoteMetadata[]> {
+  return invoke('get_all_notes', { rootPath, extraFolders });
 }
 
 export async function getNotesInFolder(folderPath: string, rootPath: string): Promise<NoteMetadata[]> {
@@ -157,4 +157,8 @@ export async function detectCloudSync(): Promise<CloudSyncInfo> {
 
 export async function getSyncStatus(path: string): Promise<string> {
   return invoke<string>('get_sync_status', { path });
+}
+
+export async function moveNote(sourcePath: string, targetFolder: string): Promise<string> {
+  return invoke('move_note', { sourcePath, targetFolder });
 }

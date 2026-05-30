@@ -86,7 +86,8 @@
     "presentationFontSize": "Presentation Font Size",
     "lineHeight": "Line Height",
     "imageUploadService": "Image Upload Service",
-    "imageUploadNone": "None (Local)"
+    "imageUploadNone": "None (Local)",
+    "debugLog": "Debug Log"
   },
   "contextMenu": {
     "pin": "Pin",
@@ -169,5 +170,8 @@
     "success": "Encryption applied",
     "removed": "Encryption removed",
     "mismatch": "Passwords do not match"
+  },
+  "toast": {
+    "unsupportedFile": "Unsupported file type"
   }
 }
