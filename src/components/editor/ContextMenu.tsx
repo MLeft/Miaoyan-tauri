@@ -124,9 +124,10 @@ export function ContextMenu({ x, y, visible, onClose, onAction }: ContextMenuPro
         return (
           <button
             key={item.action}
-            className="w-full flex items-center justify-between px-3 text-left transition-colors"
+            className="w-full flex items-center justify-between text-left transition-colors"
             style={{
               height: '28px',
+              padding: '0 12px',
               color: 'var(--text-primary)',
               backgroundColor: 'transparent',
               border: 'none',

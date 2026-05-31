@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::process::Command as StdCommand;
 use tauri::command;
 use crate::models::{NoteMetadata, NoteContent, Project, AppConfig, BacklinkItem};
 use crate::services::storage;
@@ -121,6 +122,59 @@ pub fn create_folder(parent_path: String, name: String) -> Result<String, String
     fs::create_dir_all(&path)
         .map_err(|e| format!("Failed to create folder: {}", e))?;
     Ok(path.to_string_lossy().to_string())
+}
+
+#[command]
+pub fn rename_folder(old_path: String, new_name: String) -> Result<String, String> {
+    let path = Path::new(&old_path);
+    if !path.exists() {
+        return Err("Folder does not exist".to_string());
+    }
+    let new_path = path.parent()
+        .unwrap_or(path)
+        .join(&new_name);
+    if new_path.exists() {
+        return Err(format!("Folder already exists: {}", new_name));
+    }
+    fs::rename(&path, &new_path)
+        .map_err(|e| format!("Failed to rename folder: {}", e))?;
+    Ok(new_path.to_string_lossy().to_string())
+}
+
+#[command]
+pub fn delete_folder(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err("Folder does not exist".to_string());
+    }
+    fs::remove_dir_all(p)
+        .map_err(|e| format!("Failed to delete folder: {}", e))
+}
+
+#[command]
+pub fn reveal_in_finder(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err("Path does not exist".to_string());
+    }
+    StdCommand::new("open")
+        .args(["-R", &path])
+        .spawn()
+        .map_err(|e| format!("Failed to reveal in Finder: {}", e))?;
+    Ok(())
+}
+
+#[command]
+pub fn open_in_terminal(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err("Path does not exist".to_string());
+    }
+    StdCommand::new("open")
+        .args(["-a", "Terminal", &path])
+        .spawn()
+        .map_err(|e| format!("Failed to open in Terminal: {}", e))?;
+    Ok(())
 }
 
 #[command]

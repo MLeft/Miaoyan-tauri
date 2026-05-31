@@ -70,6 +70,10 @@ pub fn run() {
             save_encrypted_note,
             remove_encryption,
             move_note,
+            rename_folder,
+            delete_folder,
+            reveal_in_finder,
+            open_in_terminal,
             write_log,
         ])
         .run(tauri::generate_context!())

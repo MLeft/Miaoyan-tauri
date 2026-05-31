@@ -166,5 +166,12 @@
     "success": "暗号化が適用されました",
     "removed": "暗号化が解除されました",
     "mismatch": "パスワードが一致しません"
+  },
+  "folderMenu": {
+    "newSubfolder": "新しいサブフォルダ",
+    "rename": "フォルダの名前変更",
+    "revealInFinder": "Finder で表示",
+    "openInTerminal": "ターミナルで開く",
+    "delete": "フォルダを削除"
   }
 }

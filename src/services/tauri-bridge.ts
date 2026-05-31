@@ -162,3 +162,19 @@ export async function getSyncStatus(path: string): Promise<string> {
 export async function moveNote(sourcePath: string, targetFolder: string): Promise<string> {
   return invoke('move_note', { sourcePath, targetFolder });
 }
+
+export async function renameFolder(oldPath: string, newName: string): Promise<string> {
+  return invoke('rename_folder', { oldPath, newName });
+}
+
+export async function deleteFolder(path: string): Promise<void> {
+  return invoke('delete_folder', { path });
+}
+
+export async function revealInFinder(path: string): Promise<void> {
+  return invoke('reveal_in_finder', { path });
+}
+
+export async function openInTerminal(path: string): Promise<void> {
+  return invoke('open_in_terminal', { path });
+}

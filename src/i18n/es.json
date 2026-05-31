@@ -147,5 +147,12 @@
     "success": "Cifrado aplicado",
     "removed": "Cifrado eliminado",
     "mismatch": "Las contraseñas no coinciden"
+  },
+  "folderMenu": {
+    "newSubfolder": "Nueva subcarpeta",
+    "rename": "Renombrar carpeta",
+    "revealInFinder": "Mostrar en Finder",
+    "openInTerminal": "Abrir en Terminal",
+    "delete": "Eliminar carpeta"
   }
 }

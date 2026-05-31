@@ -173,5 +173,12 @@
   },
   "toast": {
     "unsupportedFile": "Unsupported file type"
+  },
+  "folderMenu": {
+    "newSubfolder": "New Subfolder",
+    "rename": "Rename Folder",
+    "revealInFinder": "Reveal in Finder",
+    "openInTerminal": "Open in Terminal",
+    "delete": "Delete Folder"
   }
 }

@@ -173,5 +173,12 @@
   },
   "toast": {
     "unsupportedFile": "不支持的文件格式"
+  },
+  "folderMenu": {
+    "newSubfolder": "新建子文件夹",
+    "rename": "重命名文件夹",
+    "revealInFinder": "在 Finder 中显示",
+    "openInTerminal": "在终端中打开",
+    "delete": "删除文件夹"
   }
 }

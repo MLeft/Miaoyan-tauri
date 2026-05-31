@@ -166,5 +166,12 @@
     "success": "加密已展開",
     "removed": "加密已移除",
     "mismatch": "兩次密碼不一致"
+  },
+  "folderMenu": {
+    "newSubfolder": "新建子資料夾",
+    "rename": "重新命名資料夾",
+    "revealInFinder": "在 Finder 中顯示",
+    "openInTerminal": "在終端機中打開",
+    "delete": "刪除資料夾"
   }
 }
