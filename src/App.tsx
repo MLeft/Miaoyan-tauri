@@ -14,8 +14,7 @@ import { Backlinks } from './components/shared/Backlinks';
 import { ExportMenu } from './components/shared/ExportMenu';
 import { Toast } from './components/shared/Toast';
 import { UpdateDialog } from './components/shared/UpdateDialog';
-import { FolderPane } from './components/sidebar/FolderPane';
-import { NoteListPane } from './components/sidebar/NoteListPane';
+import { UnifiedTree } from './components/sidebar/UnifiedTree';
 import { formatMarkdown } from './services/formatter';
 import { createNote, createFolder, setAlwaysOnTop, writeNote } from './services/tauri-bridge';
 import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
@@ -147,16 +146,7 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
   const { updateConfig } = useSettingsStore();
 
   const toggleSidebar = () => {
-    if (config.show_sidebar && config.show_notes_list) {
-      // 4栏 → 3栏：隐藏文件夹栏，保留笔记列表
-      updateConfig({ show_sidebar: false });
-    } else if (!config.show_sidebar && config.show_notes_list) {
-      // 3栏 → 2栏：隐藏笔记列表
-      updateConfig({ show_notes_list: false });
-    } else {
-      // 2栏 → 4栏：全部显示
-      updateConfig({ show_sidebar: true, show_notes_list: true });
-    }
+    updateConfig({ show_sidebar: !config.show_sidebar });
   };
 
   return (
@@ -384,8 +374,8 @@ export default function App() {
           if (query && storagePath) {
             store.setSearchQuery(query, storagePath);
             // Ensure sidebar is visible
-            if (!settingsStore.config.show_sidebar || !settingsStore.config.show_notes_list) {
-              settingsStore.updateConfig({ show_sidebar: true, show_notes_list: true });
+            if (!settingsStore.config.show_sidebar) {
+              settingsStore.updateConfig({ show_sidebar: true });
             }
           }
           break;
@@ -540,13 +530,7 @@ export default function App() {
       if (mod && e.key === '1') {
         e.preventDefault();
         const cfg = useSettingsStore.getState().config;
-        if (cfg.show_sidebar && cfg.show_notes_list) {
-          useSettingsStore.getState().updateConfig({ show_sidebar: false });
-        } else if (!cfg.show_sidebar && cfg.show_notes_list) {
-          useSettingsStore.getState().updateConfig({ show_notes_list: false });
-        } else {
-          useSettingsStore.getState().updateConfig({ show_sidebar: true, show_notes_list: true });
-        }
+        useSettingsStore.getState().updateConfig({ show_sidebar: !cfg.show_sidebar });
       }
       if (mod && e.key === 'n' && !e.shiftKey) { e.preventDefault(); handleNewNote(); }
       if (mod && e.key === '3') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); setViewMode(viewMode === 'preview' ? 'split' : 'preview'); }
@@ -563,8 +547,8 @@ export default function App() {
       if (mod && !e.shiftKey && e.key === 'f') {
         e.preventDefault();
         // Ensure sidebar is visible
-        if (!useSettingsStore.getState().config.show_notes_list || !useSettingsStore.getState().config.show_sidebar) {
-          useSettingsStore.getState().updateConfig({ show_sidebar: true, show_notes_list: true });
+        if (!useSettingsStore.getState().config.show_sidebar) {
+          useSettingsStore.getState().updateConfig({ show_sidebar: true });
         }
         window.dispatchEvent(new CustomEvent('sidebar-focus-search'));
       }
@@ -621,12 +605,9 @@ export default function App() {
         onNewNote={handleNewNote}
       />
       <div className="flex-1 overflow-hidden relative">
-        <Allotment key={`${config.show_sidebar}-${config.show_notes_list}`}>
-          <Allotment.Pane minSize={150} preferredSize={150} maxSize={220} visible={config.show_sidebar}>
-            <FolderPane />
-          </Allotment.Pane>
-          <Allotment.Pane minSize={180} preferredSize={220} maxSize={280} visible={config.show_sidebar || config.show_notes_list}>
-            <NoteListPane />
+        <Allotment key={String(config.show_sidebar)}>
+          <Allotment.Pane minSize={160} preferredSize={220} maxSize={350} visible={config.show_sidebar}>
+            <UnifiedTree />
           </Allotment.Pane>
           <Allotment.Pane minSize={400}>
             <EditorPane />

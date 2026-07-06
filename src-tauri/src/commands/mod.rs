@@ -64,7 +64,12 @@ pub fn write_note(path: String, content: String) -> Result<(), String> {
 
 #[command]
 pub fn create_note(folder_path: String, title: String) -> Result<NoteMetadata, String> {
-    let file_name = format!("{}.md", title);
+    // Use title as-is if it already has a supported extension, otherwise append .md
+    let file_name = if title.ends_with(".md") || title.ends_with(".markdown") || title.ends_with(".txt") {
+        title.clone()
+    } else {
+        format!("{}.md", title)
+    };
     let path = Path::new(&folder_path).join(&file_name);
     if path.exists() {
         return Err("File already exists".to_string());
@@ -79,7 +84,7 @@ pub fn create_note(folder_path: String, title: String) -> Result<NoteMetadata, S
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH).into();
     Ok(NoteMetadata {
         id: path.to_string_lossy().to_string(),
-        title,
+        title: file_name,
         path: path.to_string_lossy().to_string(),
         folder: folder_path,
         created_at,
@@ -104,7 +109,12 @@ pub fn rename_note(old_path: String, new_title: String) -> Result<String, String
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let new_name = format!("{}.{}", new_title, ext);
+    // If new_title already contains the extension, use it directly
+    let new_name = if new_title.ends_with(&format!(".{}",  ext)) {
+        new_title
+    } else {
+        format!("{}.{}", new_title, ext)
+    };
     let new_path = old.parent()
         .ok_or("Invalid path")?
         .join(&new_name);
