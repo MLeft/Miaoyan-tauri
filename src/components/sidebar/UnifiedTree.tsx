@@ -437,7 +437,7 @@ export function UnifiedTree() {
     return (
       <div key={`folder-${project.path}`}>
         <div
-          className="flex items-center gap-1 cursor-pointer text-xs transition-colors"
+          className="group flex items-center gap-1 cursor-pointer text-xs transition-colors"
           style={rowStyle(depth, isActive)}
           onClick={() => toggleFolderExpand(project.path)}
           onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (!isActive) e.currentTarget.style.backgroundColor = 'var(--accent-light)'; }}
@@ -485,6 +485,24 @@ export function UnifiedTree() {
           )}
           {noteCount > 0 && (
             <span className="flex-shrink-0 text-[10px] ml-auto opacity-40">{noteCount}</span>
+          )}
+          {config.extra_folders.includes(project.path) && (
+            <button
+              className="flex-shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5"
+              style={{ color: 'var(--text-tertiary)' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                const newFolders = config.extra_folders.filter(f => f !== project.path);
+                useSettingsStore.getState().updateConfig({ extra_folders: newFolders });
+                loadProjects(config.storage_path);
+                handleRefreshAll();
+              }}
+              title="Remove from tree (keeps local files)"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
           )}
         </div>
         {isExpanded && (
