@@ -13,6 +13,7 @@ import {
   saveEncryptedNote,
 } from '../services/tauri-bridge';
 import { useSettingsStore } from './settings-store';
+import { useEditorStore } from './editor-store';
 
 interface NotesState {
   projects: Project[];
@@ -130,9 +131,13 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     try {
       const result = await readNote(note.path);
       set({ activeContent: result.content, isLoading: false, isDirty: false });
+      // Empty content → split (editor) view; non-empty → preview view
+      const isEmpty = !result.content.trim();
+      useEditorStore.getState().setViewMode(isEmpty ? 'split' : 'preview');
     } catch (e) {
       console.error('Failed to read note:', e);
       set({ activeContent: '', isLoading: false });
+      useEditorStore.getState().setViewMode('split');
     }
   },
 
