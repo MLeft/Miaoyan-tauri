@@ -175,6 +175,7 @@
     "unsupportedFile": "Unsupported file type"
   },
   "folderMenu": {
+    "newFile": "New File",
     "newSubfolder": "New Subfolder",
     "rename": "Rename Folder",
     "revealInFinder": "Reveal in Finder",

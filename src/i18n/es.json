@@ -149,6 +149,7 @@
     "mismatch": "Las contraseñas no coinciden"
   },
   "folderMenu": {
+    "newFile": "Nuevo archivo",
     "newSubfolder": "Nueva subcarpeta",
     "rename": "Renombrar carpeta",
     "revealInFinder": "Mostrar en Finder",

@@ -167,10 +167,28 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
     if !p.exists() {
         return Err("Path does not exist".to_string());
     }
-    StdCommand::new("open")
-        .args(["-R", &path])
-        .spawn()
-        .map_err(|e| format!("Failed to reveal in Finder: {}", e))?;
+    #[cfg(target_os = "macos")]
+    {
+        StdCommand::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in Finder: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        StdCommand::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in Explorer: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let parent = p.parent().unwrap_or(p);
+        StdCommand::new("xdg-open")
+            .arg(parent.to_string_lossy().to_string())
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in file manager: {}", e))?;
+    }
     Ok(())
 }
 
@@ -180,10 +198,41 @@ pub fn open_in_terminal(path: String) -> Result<(), String> {
     if !p.exists() {
         return Err("Path does not exist".to_string());
     }
-    StdCommand::new("open")
-        .args(["-a", "Terminal", &path])
-        .spawn()
-        .map_err(|e| format!("Failed to open in Terminal: {}", e))?;
+    #[cfg(target_os = "macos")]
+    {
+        StdCommand::new("open")
+            .args(["-a", "Terminal", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open in Terminal: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Try Windows Terminal first, fall back to cmd
+        let result = StdCommand::new("wt")
+            .args(["-d", &path])
+            .spawn();
+        if result.is_err() {
+            StdCommand::new("cmd")
+                .args(["/c", "start", "cmd", "/k", "cd", "/d", &path])
+                .spawn()
+                .map_err(|e| format!("Failed to open in Terminal: {}", e))?;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Try common terminal emulators
+        for term in &["gnome-terminal", "konsole", "xterm"] {
+            if StdCommand::new(term)
+                .arg("--working-dir")
+                .arg(&path)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        return Err("No supported terminal emulator found".to_string());
+    }
     Ok(())
 }
 

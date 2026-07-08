@@ -168,6 +168,7 @@
     "mismatch": "兩次密碼不一致"
   },
   "folderMenu": {
+    "newFile": "新建檔案",
     "newSubfolder": "新建子資料夾",
     "rename": "重新命名資料夾",
     "revealInFinder": "在 Finder 中顯示",

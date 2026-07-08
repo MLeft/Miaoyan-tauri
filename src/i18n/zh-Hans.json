@@ -175,6 +175,7 @@
     "unsupportedFile": "不支持的文件格式"
   },
   "folderMenu": {
+    "newFile": "新建文件",
     "newSubfolder": "新建子文件夹",
     "rename": "重命名文件夹",
     "revealInFinder": "在 Finder 中显示",

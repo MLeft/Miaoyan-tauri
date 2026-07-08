@@ -3,7 +3,7 @@ import type { Project, NoteMetadata } from '../../types';
 import { useNotesStore } from '../../stores/notes-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import {
-  createNote, deleteNote, renameNote, togglePin,
+  createNote, deleteNote, renameNote,
   createFolder, moveNote, renameFolder, deleteFolder,
   revealInFinder, openInTerminal, getAllNotes,
 } from '../../services/tauri-bridge';
@@ -40,19 +40,6 @@ const IconChevronDown = () => (
 const IconPlus = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-  </svg>
-);
-const IconNewFile = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    <line x1="12" y1="18" x2="12" y2="12" /><line x1="9" y1="15" x2="15" y2="15" />
-  </svg>
-);
-const IconNewFolder = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-    <line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" />
   </svg>
 );
 const IconSearch = () => (
@@ -217,35 +204,19 @@ export function UnifiedTree() {
     });
   }, []);
 
-  /* ── Create note ── */
-  const handleCreateNote = useCallback(async () => {
-    const folder = config.storage_path;
+  /* ── Create note (in right-clicked folder) ── */
+  const handleNewFileInFolder = useCallback(async () => {
+    if (!contextMenu || contextMenu.type !== 'folder') return;
     try {
-      const note = await createNote(folder, `Untitled-${Date.now()}`);
+      const note = await createNote(contextMenu.project.path, `Untitled-${Date.now()}`);
       await handleRefreshAll();
+      await loadProjects(config.storage_path);
       await selectNote(note);
     } catch (e) { console.error('Failed to create note:', e); }
-  }, [config.storage_path, handleRefreshAll, selectNote]);
-
-  /* ── Create folder ── */
-  const handleCreateFolder = useCallback(async () => {
-    const name = prompt(t('sidebar.newFolder'));
-    if (!name) return;
-    const parent = config.storage_path;
-    try {
-      await createFolder(parent, name);
-      await loadProjects(config.storage_path);
-    } catch (e) { console.error('Failed to create folder:', e); }
-  }, [config.storage_path, loadProjects, t]);
+    setContextMenu(null);
+  }, [contextMenu, handleRefreshAll, loadProjects, config.storage_path, selectNote]);
 
   /* ── Note context menu handlers ── */
-  const handlePinNote = useCallback(async () => {
-    if (!contextMenu || contextMenu.type !== 'note') return;
-    try { await togglePin(contextMenu.note.path); await handleRefreshAll(); }
-    catch (e) { console.error('Failed to toggle pin:', e); }
-    setContextMenu(null);
-  }, [contextMenu, handleRefreshAll]);
-
   const handleDeleteNote = useCallback(async () => {
     if (!contextMenu || contextMenu.type !== 'note') return;
     try { await deleteNote(contextMenu.note.path); await handleRefreshAll(); }
@@ -375,7 +346,6 @@ export function UnifiedTree() {
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
       >
         <span className="flex-shrink-0 opacity-40"><IconFile /></span>
-        {note.pinned && <span className="text-[9px] flex-shrink-0" style={{ color: 'var(--pin-color)' }}>&#9733;</span>}
         {note.is_encrypted && <span className="flex-shrink-0" style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}><IconLockSmall /></span>}
         {isRenaming ? (
           <input
@@ -544,16 +514,6 @@ export function UnifiedTree() {
               style={{ color: 'var(--text-primary)' }}
             />
           </div>
-          <button
-            onClick={handleCreateNote}
-            className="p-1 rounded transition-colors flex-shrink-0"
-            style={{ color: 'var(--text-tertiary)' }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-            title={t('notesList.newNote')}
-          >
-            <IconNewFile />
-          </button>
         </div>
       </div>
 
@@ -585,16 +545,6 @@ export function UnifiedTree() {
           <span className="flex-shrink-0"><IconHome /></span>
           <span className="font-medium">{t('sidebar.allNotes')}</span>
           <span className="ml-auto text-[10px] opacity-50">{allNotes.length}</span>
-          <button
-            onClick={(e) => { e.stopPropagation(); handleCreateFolder(); }}
-            className="flex-shrink-0 p-0.5 rounded transition-colors opacity-50 hover:opacity-100"
-            style={{ color: 'var(--text-tertiary)' }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-            title={t('sidebar.newFolder')}
-          >
-            <IconNewFolder />
-          </button>
         </div>
 
         {/* Tree content */}
@@ -620,12 +570,6 @@ export function UnifiedTree() {
           {contextMenu.type === 'note' ? (
             <>
               {/* Note context menu */}
-              <button onClick={handlePinNote} className="w-full text-left text-xs rounded-md"
-                style={{ color: 'var(--text-primary)', padding: '5px 12px' }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                {contextMenu.note.pinned ? t('contextMenu.unpin') : t('contextMenu.pin')}
-              </button>
               <button onClick={handleStartRenameNote} className="w-full text-left text-xs rounded-md"
                 style={{ color: 'var(--text-primary)', padding: '5px 12px' }}
                 onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
@@ -659,6 +603,14 @@ export function UnifiedTree() {
           ) : (
             <>
               {/* Folder context menu */}
+              <div className="flex items-center gap-2 cursor-pointer text-xs"
+                style={{ padding: '5px 12px', color: 'var(--text-primary)' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                onClick={handleNewFileInFolder}>
+                <span style={{ opacity: 0.6 }}><IconFile /></span>
+                <span>{t('folderMenu.newFile')}</span>
+              </div>
               <div className="flex items-center gap-2 cursor-pointer text-xs"
                 style={{ padding: '5px 12px', color: 'var(--text-primary)' }}
                 onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
