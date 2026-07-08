@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Allotment } from 'allotment';
 import 'allotment/dist/style.css';
 import { Editor } from './components/editor/Editor';
+import { TabBar } from './components/editor/TabBar';
 import { Preview } from './components/preview/Preview';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { PresentationMode } from './components/presentation/PresentationMode';
@@ -226,6 +227,7 @@ function EditorPane() {
 
   return (
     <div className="h-full flex flex-col relative">
+      <TabBar />
       <div className="flex-1 relative min-h-0 overflow-hidden">
         {viewMode === 'split' ? (
           <Allotment>
@@ -543,6 +545,21 @@ export default function App() {
         e.preventDefault();
         handleFormat();
       }
+      // Cmd+W: close active tab
+      if (mod && !e.shiftKey && e.key === 'w') {
+        e.preventDefault();
+        const { activeTabPath, closeTab } = useNotesStore.getState();
+        if (activeTabPath) closeTab(activeTabPath);
+      }
+      // Ctrl+Tab: switch to next tab
+      if (e.ctrlKey && e.key === 'Tab') {
+        e.preventDefault();
+        const { openTabs, activeTabPath, switchTab } = useNotesStore.getState();
+        if (openTabs.length < 2) return;
+        const idx = openTabs.findIndex(t => t.path === activeTabPath);
+        const nextIdx = e.shiftKey ? (idx - 1 + openTabs.length) % openTabs.length : (idx + 1) % openTabs.length;
+        switchTab(openTabs[nextIdx].path);
+      }
       // Cmd+F: focus sidebar search
       if (mod && !e.shiftKey && e.key === 'f') {
         e.preventDefault();
@@ -605,7 +622,7 @@ export default function App() {
         onNewNote={handleNewNote}
       />
       <div className="flex-1 overflow-hidden relative">
-        <Allotment key={String(config.show_sidebar)}>
+        <Allotment>
           <Allotment.Pane minSize={160} preferredSize={220} maxSize={350} visible={config.show_sidebar}>
             <UnifiedTree />
           </Allotment.Pane>

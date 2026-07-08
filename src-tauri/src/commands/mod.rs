@@ -513,10 +513,10 @@ fn add_footnote_backlinks(html: String) -> String {
 }
 
 #[command]
-pub fn start_watching(app_handle: tauri::AppHandle, path: String) -> Result<(), String> {
+pub fn start_watching(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
     use crate::services::watcher;
     std::thread::spawn(move || {
-        let _watcher = watcher::start_watcher(app_handle, &path);
+        let _watcher = watcher::start_watcher(app_handle, &paths);
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }

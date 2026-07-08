@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import type { Project, NoteMetadata } from '../../types';
 import { useNotesStore } from '../../stores/notes-store';
 import { useSettingsStore } from '../../stores/settings-store';
@@ -6,6 +7,7 @@ import {
   createNote, deleteNote, renameNote,
   createFolder, moveNote, renameFolder, deleteFolder,
   revealInFinder, openInTerminal, getAllNotes,
+  startWatching,
 } from '../../services/tauri-bridge';
 import { useTranslation } from 'react-i18next';
 import { SyncStatusIndicator } from '../shared/SyncStatus';
@@ -130,11 +132,11 @@ export function UnifiedTree() {
     selectNote, searchQuery, setSearchQuery,
     isLoading, refreshNotes, loadProjects,
     encryptionDialog, setEncryptionDialog, onNoteUnlocked,
+    expandedFolders, allNotesExpanded,
+    toggleExpandedFolder, setAllNotesExpanded, clearExpandedFolders,
   } = useNotesStore();
   const { config } = useSettingsStore();
 
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  const [allNotesExpanded, setAllNotesExpanded] = useState(true);
   const [contextMenu, setContextMenu] = useState<TreeContextMenu>(null);
   const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
   const [renameNoteValue, setRenameNoteValue] = useState('');
@@ -161,6 +163,32 @@ export function UnifiedTree() {
     await refreshNotes(config.storage_path);
     await reloadAllNotes();
   }, [refreshNotes, config.storage_path, reloadAllNotes]);
+
+  /* ── Watch filesystem changes ── */
+  useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Start watching storage path + extra folders
+    const watchPaths = [config.storage_path, ...(config.extra_folders || [])].filter(Boolean);
+    if (watchPaths.length > 0) {
+      startWatching(watchPaths).catch(e => console.error('Failed to start watcher:', e));
+    }
+
+    const unlisten = listen<{ type: string; paths: string[] }>('fs-change', () => {
+      // Debounce: wait 500ms after last event before refreshing
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(async () => {
+        await refreshNotes(config.storage_path);
+        await reloadAllNotes();
+        await loadProjects(config.storage_path);
+      }, 500);
+    });
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unlisten.then(fn => fn());
+    };
+  }, [config.storage_path, config.extra_folders, refreshNotes, reloadAllNotes, loadProjects]);
 
   /* ── Search filter (local, by title) ── */
   const filteredNotes = useMemo(() => {
@@ -197,12 +225,8 @@ export function UnifiedTree() {
 
   /* ── Toggle folder expand ── */
   const toggleFolderExpand = useCallback((path: string) => {
-    setExpandedFolders(prev => {
-      const next = new Set(prev);
-      next.has(path) ? next.delete(path) : next.add(path);
-      return next;
-    });
-  }, []);
+    toggleExpandedFolder(path);
+  }, [toggleExpandedFolder]);
 
   /* ── Create note (in right-clicked folder) ── */
   const handleNewFileInFolder = useCallback(async () => {
@@ -388,9 +412,9 @@ export function UnifiedTree() {
     prevSearchRef.current = searchQuery;
     if (prev && !curr) {
       // No folder selected → collapse all auto-expanded folders
-        setExpandedFolders(new Set());
+        clearExpandedFolders();
     }
-  }, [searchQuery, projects, folderMatchesSearch]);
+  }, [searchQuery, projects, folderMatchesSearch, clearExpandedFolders]);
 
   /* ── Render a folder row (recursive) ── */
   const renderFolderRow = (project: Project, depth: number) => {
@@ -398,7 +422,7 @@ export function UnifiedTree() {
     // During search, skip folders that don't match
     if (query && !folderMatchesSearch(project, query)) return null;
 
-    const isExpanded = query ? true : expandedFolders.has(project.path);
+    const isExpanded = query ? true : expandedFolders.includes(project.path);
     const isActive = false;
     const isRenaming = renamingFolderPath === project.path;
     const folderNotes = getNotesFor(project.path);
@@ -534,12 +558,12 @@ export function UnifiedTree() {
             backgroundColor: 'var(--accent-light)',
             borderRadius: '6px',
           }}
-          onClick={() => setAllNotesExpanded(v => !v)}
+          onClick={() => setAllNotesExpanded(!allNotesExpanded)}
           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-light)'}
         >
           <span className="w-3 h-3 flex items-center justify-center flex-shrink-0 opacity-50"
-            onClick={(e) => { e.stopPropagation(); setAllNotesExpanded(v => !v); }}>
+            onClick={(e) => { e.stopPropagation(); setAllNotesExpanded(!allNotesExpanded); }}>
             {allNotesExpanded ? <IconChevronDown /> : <IconChevronRight />}
           </span>
           <span className="flex-shrink-0"><IconHome /></span>

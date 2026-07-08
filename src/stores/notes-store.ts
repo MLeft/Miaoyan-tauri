@@ -14,6 +14,16 @@ import {
 } from '../services/tauri-bridge';
 import { useSettingsStore } from './settings-store';
 import { useEditorStore } from './editor-store';
+import type { ViewMode } from './editor-store';
+
+export interface OpenTab {
+  path: string;
+  note: NoteMetadata;
+  content: string;
+  isDirty: boolean;
+  viewMode: ViewMode;
+  encryptionPassword?: string | null;
+}
 
 interface NotesState {
   projects: Project[];
@@ -42,6 +52,10 @@ interface NotesState {
   loadNotes: (rootPath: string) => Promise<void>;
   loadNotesInFolder: (folderPath: string, rootPath: string) => Promise<void>;
   selectNote: (note: NoteMetadata) => Promise<void>;
+  closeTab: (path: string) => Promise<void>;
+  switchTab: (path: string) => Promise<void>;
+  closeAllTabs: () => Promise<void>;
+  closeOtherTabs: (path: string) => Promise<void>;
   updateContent: (content: string, rootPath: string) => void;
   saveCurrentNote: () => Promise<void>;
   setSearchQuery: (query: string, rootPath: string) => Promise<void>;
@@ -55,6 +69,17 @@ interface NotesState {
   setEncryptionDialog: (dialog: NotesState['encryptionDialog']) => void;
   onNoteUnlocked: (content: string, password: string) => void;
   clearEncryptionPassword: () => void;
+
+  // Tab state
+  openTabs: OpenTab[];
+  activeTabPath: string | null;
+
+  // Sidebar tree UI state
+  expandedFolders: string[];
+  allNotesExpanded: boolean;
+  toggleExpandedFolder: (path: string) => void;
+  setAllNotesExpanded: (v: boolean) => void;
+  clearExpandedFolders: () => void;
 }
 
 export const useNotesStore = create<NotesState>((set, get) => ({
@@ -76,6 +101,21 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   activeEncryptionPassword: null,
 
   isTemporaryFile: false,
+
+  // Tab state
+  openTabs: [],
+  activeTabPath: null,
+
+  // Sidebar tree UI state
+  expandedFolders: [],
+  allNotesExpanded: true,
+  toggleExpandedFolder: (path) => set((s) => ({
+    expandedFolders: s.expandedFolders.includes(path)
+      ? s.expandedFolders.filter(p => p !== path)
+      : [...s.expandedFolders, path],
+  })),
+  setAllNotesExpanded: (v) => set({ allNotesExpanded: v }),
+  clearExpandedFolders: () => set({ expandedFolders: [] }),
 
   loadProjects: async (rootPath) => {
     try {
@@ -111,10 +151,27 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   selectNote: async (note) => {
-    // Save current note if dirty
+    // Save current tab if dirty
     const state = get();
     if (state.isDirty && state.activeNote) {
       await get().saveCurrentNote();
+    }
+
+    // Check if note is already open in a tab
+    const existingTab = state.openTabs.find(t => t.path === note.path);
+    if (existingTab) {
+      // Switch to existing tab
+      set({
+        activeNote: existingTab.note,
+        activeContent: existingTab.content,
+        activeTabPath: existingTab.path,
+        isDirty: existingTab.isDirty,
+        isLoading: false,
+        activeEncryptionPassword: existingTab.encryptionPassword || null,
+        isTemporaryFile: false,
+      });
+      useEditorStore.getState().setViewMode(existingTab.viewMode);
+      return;
     }
 
     set({ activeNote: note, isLoading: true, activeEncryptionPassword: null, isTemporaryFile: false });
@@ -130,10 +187,26 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
     try {
       const result = await readNote(note.path);
-      set({ activeContent: result.content, isLoading: false, isDirty: false });
-      // Empty content → split (editor) view; non-empty → preview view
       const isEmpty = !result.content.trim();
-      useEditorStore.getState().setViewMode(isEmpty ? 'split' : 'preview');
+      const viewMode: ViewMode = isEmpty ? 'split' : 'preview';
+
+      // Create new tab
+      const newTab: OpenTab = {
+        path: note.path,
+        note,
+        content: result.content,
+        isDirty: false,
+        viewMode,
+      };
+
+      set((s) => ({
+        openTabs: [...s.openTabs, newTab],
+        activeTabPath: note.path,
+        activeContent: result.content,
+        isLoading: false,
+        isDirty: false,
+      }));
+      useEditorStore.getState().setViewMode(viewMode);
     } catch (e) {
       console.error('Failed to read note:', e);
       set({ activeContent: '', isLoading: false });
@@ -141,9 +214,171 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     }
   },
 
+  switchTab: async (path) => {
+    const state = get();
+    // Save current tab if dirty
+    if (state.isDirty && state.activeNote) {
+      await get().saveCurrentNote();
+    }
+
+    const tab = state.openTabs.find(t => t.path === path);
+    if (!tab) return;
+
+    // Save current viewMode to old tab before switching
+    const currentViewMode = useEditorStore.getState().viewMode;
+    const updatedTabs = state.openTabs.map(t =>
+      t.path === state.activeTabPath ? { ...t, viewMode: currentViewMode } : t
+    );
+
+    set({
+      openTabs: updatedTabs,
+      activeNote: tab.note,
+      activeContent: tab.content,
+      activeTabPath: tab.path,
+      isDirty: tab.isDirty,
+      isLoading: false,
+      activeEncryptionPassword: tab.encryptionPassword || null,
+      isTemporaryFile: false,
+    });
+    useEditorStore.getState().setViewMode(tab.viewMode);
+  },
+
+  closeTab: async (path) => {
+    const state = get();
+    const tab = state.openTabs.find(t => t.path === path);
+
+    // Save dirty tab before closing
+    if (tab && tab.isDirty) {
+      try {
+        const { config } = useSettingsStore.getState();
+        let contentToSave = tab.content;
+        if (config.line_ending === 'crlf') {
+          contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
+        } else {
+          contentToSave = contentToSave.replace(/\r\n/g, '\n');
+        }
+        if (tab.note.is_encrypted && tab.encryptionPassword) {
+          await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
+        } else {
+          await writeNote(tab.path, contentToSave);
+        }
+      } catch (e) {
+        console.error('Failed to save dirty tab on close:', e);
+      }
+    }
+
+    const newTabs = state.openTabs.filter(t => t.path !== path);
+
+    if (state.activeTabPath === path) {
+      if (newTabs.length === 0) {
+        // No tabs left
+        set({
+          openTabs: [],
+          activeTabPath: null,
+          activeNote: null,
+          activeContent: '',
+          isDirty: false,
+          isLoading: false,
+        });
+      } else {
+        // Switch to adjacent tab
+        const oldIndex = state.openTabs.findIndex(t => t.path === path);
+        const newIndex = Math.min(oldIndex, newTabs.length - 1);
+        const nextTab = newTabs[newIndex];
+        set({
+          openTabs: newTabs,
+          activeTabPath: nextTab.path,
+          activeNote: nextTab.note,
+          activeContent: nextTab.content,
+          isDirty: nextTab.isDirty,
+          isLoading: false,
+          activeEncryptionPassword: nextTab.encryptionPassword || null,
+        });
+        useEditorStore.getState().setViewMode(nextTab.viewMode);
+      }
+    } else {
+      set({ openTabs: newTabs });
+    }
+  },
+
+  closeAllTabs: async () => {
+    const state = get();
+    // Save all dirty tabs
+    for (const tab of state.openTabs) {
+      if (tab.isDirty) {
+        try {
+          const { config } = useSettingsStore.getState();
+          let contentToSave = tab.content;
+          if (config.line_ending === 'crlf') {
+            contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
+          } else {
+            contentToSave = contentToSave.replace(/\r\n/g, '\n');
+          }
+          if (tab.note.is_encrypted && tab.encryptionPassword) {
+            await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
+          } else {
+            await writeNote(tab.path, contentToSave);
+          }
+        } catch (e) {
+          console.error('Failed to save dirty tab:', e);
+        }
+      }
+    }
+    set({
+      openTabs: [],
+      activeTabPath: null,
+      activeNote: null,
+      activeContent: '',
+      isDirty: false,
+      isLoading: false,
+    });
+  },
+
+  closeOtherTabs: async (path) => {
+    const state = get();
+    const keepTab = state.openTabs.find(t => t.path === path);
+    if (!keepTab) return;
+    // Save dirty tabs that are being closed
+    for (const tab of state.openTabs) {
+      if (tab.path !== path && tab.isDirty) {
+        try {
+          const { config } = useSettingsStore.getState();
+          let contentToSave = tab.content;
+          if (config.line_ending === 'crlf') {
+            contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
+          } else {
+            contentToSave = contentToSave.replace(/\r\n/g, '\n');
+          }
+          if (tab.note.is_encrypted && tab.encryptionPassword) {
+            await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
+          } else {
+            await writeNote(tab.path, contentToSave);
+          }
+        } catch (e) {
+          console.error('Failed to save dirty tab:', e);
+        }
+      }
+    }
+    set({
+      openTabs: [keepTab],
+      activeTabPath: keepTab.path,
+      activeNote: keepTab.note,
+      activeContent: keepTab.content,
+      isDirty: keepTab.isDirty,
+      isLoading: false,
+    });
+    useEditorStore.getState().setViewMode(keepTab.viewMode);
+  },
+
   updateContent: (content, rootPath) => {
     const state = get();
-    set({ activeContent: content, isDirty: true });
+    // Update both store-level fields and tab-level fields
+    const updatedTabs = state.openTabs.map(t =>
+      t.path === state.activeTabPath
+        ? { ...t, content, isDirty: true }
+        : t
+    );
+    set({ activeContent: content, isDirty: true, openTabs: updatedTabs });
 
     // Debounced auto-save (1.5 seconds)
     if (state.saveTimer) {
@@ -156,7 +391,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   saveCurrentNote: async () => {
-    const { activeNote, activeContent, isDirty, activeEncryptionPassword } = get();
+    const { activeNote, activeContent, isDirty, activeEncryptionPassword, activeTabPath } = get();
     if (!activeNote || !isDirty) return;
 
     try {
@@ -175,7 +410,12 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       } else {
         await writeNote(activeNote.path, contentToSave);
       }
-      set({ isDirty: false });
+
+      // Update dirty state in both store and tab
+      const updatedTabs = get().openTabs.map(t =>
+        t.path === activeTabPath ? { ...t, isDirty: false, content: activeContent } : t
+      );
+      set({ isDirty: false, openTabs: updatedTabs });
     } catch (e) {
       console.error('Failed to save note:', e);
     }
@@ -274,7 +514,11 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   onNoteUnlocked: (content, password) => {
-    set({ activeContent: content, isDirty: false, activeEncryptionPassword: password });
+    const { activeTabPath } = get();
+    const updatedTabs = get().openTabs.map(t =>
+      t.path === activeTabPath ? { ...t, content, isDirty: false, encryptionPassword: password } : t
+    );
+    set({ activeContent: content, isDirty: false, activeEncryptionPassword: password, openTabs: updatedTabs });
   },
 
   clearEncryptionPassword: () => {
@@ -295,7 +539,22 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         size: content.content.length,
         is_encrypted: false,
       };
-      set({ activeNote: meta, activeContent: content.content, isTemporaryFile: true });
+      // Add as tab
+      const newTab: OpenTab = {
+        path,
+        note: meta,
+        content: content.content,
+        isDirty: false,
+        viewMode: 'split',
+      };
+      set((s) => ({
+        openTabs: [...s.openTabs.filter(t => t.path !== path), newTab],
+        activeTabPath: path,
+        activeNote: meta,
+        activeContent: content.content,
+        isTemporaryFile: true,
+      }));
+      useEditorStore.getState().setViewMode('split');
     } catch (e) {
       console.error('Failed to open temporary file:', e);
     }

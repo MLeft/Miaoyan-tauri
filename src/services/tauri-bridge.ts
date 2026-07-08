@@ -53,8 +53,8 @@ export async function parseMarkdown(content: string): Promise<string> {
   return invoke('parse_markdown', { content });
 }
 
-export async function startWatching(path: string): Promise<void> {
-  return invoke('start_watching', { path });
+export async function startWatching(paths: string[]): Promise<void> {
+  return invoke('start_watching', { paths });
 }
 
 // Version History
