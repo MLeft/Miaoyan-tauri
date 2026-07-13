@@ -174,13 +174,17 @@ export function UnifiedTree() {
       startWatching(watchPaths).catch(e => console.error('Failed to start watcher:', e));
     }
 
-    const unlisten = listen<{ type: string; paths: string[] }>('fs-change', () => {
+    const unlisten = listen<{ type: string; paths: string[] }>('fs-change', (event) => {
       // Debounce: wait 500ms after last event before refreshing
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         await refreshNotes(config.storage_path);
         await reloadAllNotes();
         await loadProjects(config.storage_path);
+        // Reload content of open tabs if their files changed externally
+        if (event.payload.paths.length > 0) {
+          useNotesStore.getState().reloadOpenTabs(event.payload.paths);
+        }
       }, 500);
     });
 

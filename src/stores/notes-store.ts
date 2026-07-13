@@ -56,6 +56,9 @@ interface NotesState {
   switchTab: (path: string) => Promise<void>;
   closeAllTabs: () => Promise<void>;
   closeOtherTabs: (path: string) => Promise<void>;
+  closeLeftTabs: (path: string) => Promise<void>;
+  closeRightTabs: (path: string) => Promise<void>;
+  reloadOpenTabs: (changedPaths: string[]) => Promise<void>;
   updateContent: (content: string, rootPath: string) => void;
   saveCurrentNote: () => Promise<void>;
   setSearchQuery: (query: string, rootPath: string) => Promise<void>;
@@ -174,11 +177,11 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       return;
     }
 
-    set({ activeNote: note, isLoading: true, activeEncryptionPassword: null, isTemporaryFile: false });
+    set({ isLoading: true, activeEncryptionPassword: null, isTemporaryFile: false });
 
     // If encrypted, show unlock dialog instead of loading content
     if (note.is_encrypted) {
-      set({ activeContent: '', isLoading: false, isDirty: false });
+      set({ activeNote: note, activeContent: '', isLoading: false, isDirty: false });
       set({
         encryptionDialog: { visible: true, mode: 'unlock', notePath: note.path },
       });
@@ -199,7 +202,9 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         viewMode,
       };
 
+      // Set activeNote + activeContent atomically to avoid blank first render
       set((s) => ({
+        activeNote: note,
         openTabs: [...s.openTabs, newTab],
         activeTabPath: note.path,
         activeContent: result.content,
@@ -209,7 +214,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       useEditorStore.getState().setViewMode(viewMode);
     } catch (e) {
       console.error('Failed to read note:', e);
-      set({ activeContent: '', isLoading: false });
+      set({ activeNote: note, activeContent: '', isLoading: false });
       useEditorStore.getState().setViewMode('split');
     }
   },
@@ -368,6 +373,117 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       isLoading: false,
     });
     useEditorStore.getState().setViewMode(keepTab.viewMode);
+  },
+
+  closeLeftTabs: async (path) => {
+    const state = get();
+    const idx = state.openTabs.findIndex(t => t.path === path);
+    if (idx <= 0) return;
+    const toClose = state.openTabs.slice(0, idx);
+    for (const tab of toClose) {
+      if (tab.isDirty) {
+        try {
+          const { config } = useSettingsStore.getState();
+          let contentToSave = tab.content;
+          if (config.line_ending === 'crlf') {
+            contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
+          } else {
+            contentToSave = contentToSave.replace(/\r\n/g, '\n');
+          }
+          if (tab.note.is_encrypted && tab.encryptionPassword) {
+            await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
+          } else {
+            await writeNote(tab.path, contentToSave);
+          }
+        } catch (e) { console.error('Failed to save dirty tab:', e); }
+      }
+    }
+    const remaining = state.openTabs.slice(idx);
+    // If active tab was closed, switch to the target tab
+    const activeInRemaining = remaining.find(t => t.path === state.activeTabPath) || remaining[0];
+    set({
+      openTabs: remaining,
+      activeTabPath: activeInRemaining?.path ?? null,
+      activeNote: activeInRemaining?.note ?? null,
+      activeContent: activeInRemaining?.content ?? '',
+      isDirty: activeInRemaining?.isDirty ?? false,
+      isLoading: false,
+    });
+    if (activeInRemaining) {
+      useEditorStore.getState().setViewMode(activeInRemaining.viewMode);
+    }
+  },
+
+  closeRightTabs: async (path) => {
+    const state = get();
+    const idx = state.openTabs.findIndex(t => t.path === path);
+    if (idx < 0 || idx >= state.openTabs.length - 1) return;
+    const toClose = state.openTabs.slice(idx + 1);
+    for (const tab of toClose) {
+      if (tab.isDirty) {
+        try {
+          const { config } = useSettingsStore.getState();
+          let contentToSave = tab.content;
+          if (config.line_ending === 'crlf') {
+            contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
+          } else {
+            contentToSave = contentToSave.replace(/\r\n/g, '\n');
+          }
+          if (tab.note.is_encrypted && tab.encryptionPassword) {
+            await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
+          } else {
+            await writeNote(tab.path, contentToSave);
+          }
+        } catch (e) { console.error('Failed to save dirty tab:', e); }
+      }
+    }
+    const remaining = state.openTabs.slice(0, idx + 1);
+    const activeInRemaining = remaining.find(t => t.path === state.activeTabPath) || remaining[remaining.length - 1];
+    set({
+      openTabs: remaining,
+      activeTabPath: activeInRemaining?.path ?? null,
+      activeNote: activeInRemaining?.note ?? null,
+      activeContent: activeInRemaining?.content ?? '',
+      isDirty: activeInRemaining?.isDirty ?? false,
+      isLoading: false,
+    });
+    if (activeInRemaining) {
+      useEditorStore.getState().setViewMode(activeInRemaining.viewMode);
+    }
+  },
+
+  reloadOpenTabs: async (changedPaths) => {
+    const state = get();
+    const changedSet = new Set(changedPaths.map(p => p.replace(/\\/g, '/')));
+    let updatedTabs = [...state.openTabs];
+    let activeNeedsReload = false;
+
+    for (let i = 0; i < updatedTabs.length; i++) {
+      const tab = updatedTabs[i];
+      const normalizedPath = tab.path.replace(/\\/g, '/');
+      // Only reload if file was changed externally and tab is not dirty
+      if (changedSet.has(normalizedPath) && !tab.isDirty) {
+        try {
+          const result = await readNote(tab.path);
+          updatedTabs[i] = { ...tab, content: result.content };
+          if (tab.path === state.activeTabPath) {
+            activeNeedsReload = true;
+          }
+        } catch (e) {
+          // File might have been deleted
+          console.warn('Failed to reload tab:', tab.path, e);
+        }
+      }
+    }
+
+    const updates: any = { openTabs: updatedTabs };
+    if (activeNeedsReload) {
+      const activeTab = updatedTabs.find(t => t.path === state.activeTabPath);
+      if (activeTab) {
+        updates.activeContent = activeTab.content;
+      }
+    }
+    set(updates);
   },
 
   updateContent: (content, rootPath) => {
