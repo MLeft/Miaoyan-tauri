@@ -96,6 +96,7 @@
     "delete": "Delete",
     "openInFinder": "Show in File Manager",
     "duplicate": "Duplicate",
+    "copyName": "Copy File Name",
     "bold": "Bold",
     "italic": "Italic",
     "strikethrough": "Strikethrough",
@@ -180,6 +181,7 @@
     "rename": "Rename Folder",
     "revealInFinder": "Reveal in Finder",
     "openInTerminal": "Open in Terminal",
-    "delete": "Delete Folder"
+    "delete": "Delete Folder",
+    "copyName": "Copy Folder Name"
   }
 }

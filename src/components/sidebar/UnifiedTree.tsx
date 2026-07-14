@@ -83,6 +83,12 @@ const IconTrash = () => (
     <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
   </svg>
 );
+const IconCopy = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+);
 
 /* ── Helpers ── */
 function getParentPath(notePath: string): string {
@@ -277,6 +283,15 @@ export function UnifiedTree() {
     setEncryptionDialog({ visible: true, mode: 'remove', notePath: contextMenu.note.path });
     setContextMenu(null);
   }, [contextMenu, setEncryptionDialog]);
+
+  const handleCopyName = useCallback(async (name: string) => {
+    try {
+      await navigator.clipboard.writeText(name);
+    } catch (e) {
+      console.error('Failed to copy name:', e);
+    }
+    setContextMenu(null);
+  }, []);
 
   /* ── Folder context menu handlers ── */
   const handleNewSubfolder = useCallback(async () => {
@@ -604,6 +619,12 @@ export function UnifiedTree() {
                 onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
                 {t('contextMenu.rename')}
               </button>
+              <button onClick={() => handleCopyName(contextMenu.note.title)} className="w-full text-left text-xs rounded-md"
+                style={{ color: 'var(--text-primary)', padding: '5px 12px' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                {t('contextMenu.copyName')}
+              </button>
               <div style={{ borderTop: '1px solid var(--border)', margin: '3px 0' }} />
               {contextMenu.note.is_encrypted ? (
                 <button onClick={handleRemoveEncryption} className="w-full text-left text-xs rounded-md"
@@ -654,6 +675,14 @@ export function UnifiedTree() {
                 onClick={handleStartRenameFolder}>
                 <span style={{ opacity: 0.6 }}><IconEdit /></span>
                 <span>{t('folderMenu.rename')}</span>
+              </div>
+              <div className="flex items-center gap-2 cursor-pointer text-xs"
+                style={{ padding: '5px 12px', color: 'var(--text-primary)' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                onClick={() => handleCopyName(contextMenu.project.name)}>
+                <span style={{ opacity: 0.6 }}><IconCopy /></span>
+                <span>{t('folderMenu.copyName')}</span>
               </div>
               <div className="flex items-center gap-2 cursor-pointer text-xs"
                 style={{ padding: '5px 12px', color: 'var(--text-primary)' }}

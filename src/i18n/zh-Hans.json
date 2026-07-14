@@ -96,6 +96,7 @@
     "delete": "删除",
     "openInFinder": "在文件管理器中显示",
     "duplicate": "复制",
+    "copyName": "复制文件名",
     "bold": "粗体",
     "italic": "斜体",
     "strikethrough": "删除线",
@@ -180,6 +181,7 @@
     "rename": "重命名文件夹",
     "revealInFinder": "在 Finder 中显示",
     "openInTerminal": "在终端中打开",
-    "delete": "删除文件夹"
+    "delete": "删除文件夹",
+    "copyName": "复制文件夹名称"
   }
 }
