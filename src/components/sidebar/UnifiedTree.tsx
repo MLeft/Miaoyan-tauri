@@ -161,8 +161,8 @@ export function UnifiedTree() {
     } catch (e) { console.error('Failed to load all notes:', e); }
   }, []);
 
-  // Load all notes on mount and when storage path changes
-  useEffect(() => { reloadAllNotes(); }, [config.storage_path, reloadAllNotes]);
+  // Load all notes on mount, when storage path changes, or when extra folders change
+  useEffect(() => { reloadAllNotes(); }, [config.storage_path, config.extra_folders, reloadAllNotes]);
 
   /* ── Refresh both store notes and local all-notes cache ── */
   const handleRefreshAll = useCallback(async () => {

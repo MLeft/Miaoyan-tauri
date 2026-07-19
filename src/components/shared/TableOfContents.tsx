@@ -13,11 +13,21 @@ interface Props {
 }
 
 export function TableOfContents({ onNavigate, onClose }: Props) {
-  const { activeContent } = useNotesStore();
+  const { activeContent, activeTabPath, openTabs } = useNotesStore();
+
+  // Use activeContent as primary source; fall back to active tab's cached content
+  const content = useMemo(() => {
+    if (activeContent) return activeContent;
+    if (activeTabPath) {
+      const tab = openTabs.find(t => t.path === activeTabPath);
+      if (tab?.content) return tab.content;
+    }
+    return '';
+  }, [activeContent, activeTabPath, openTabs]);
 
   const headings = useMemo(() => {
-    if (!activeContent) return [];
-    const lines = activeContent.split('\n');
+    if (!content) return [];
+    const lines = content.replace(/\r\n/g, '\n').split('\n');
     const items: TocItem[] = [];
     let inCodeBlock = false;
 
@@ -38,7 +48,7 @@ export function TableOfContents({ onNavigate, onClose }: Props) {
       }
     });
     return items;
-  }, [activeContent]);
+  }, [content]);
 
   if (headings.length === 0) {
     return (

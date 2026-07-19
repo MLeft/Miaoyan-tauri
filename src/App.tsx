@@ -471,7 +471,7 @@ export default function App() {
                 await useSettingsStore.getState().updateConfig({
                   extra_folders: [...current.extra_folders, path]
                 });
-                await useNotesStore.getState().loadProjects(current.storage_path);
+                await useNotesStore.getState().refreshNotes(current.storage_path);
                 log(`Added extra folder: ${path}`);
               }
             } else {
@@ -489,7 +489,7 @@ export default function App() {
                     extra_folders: [...current.extra_folders, folder]
                   });
                 }
-                await useNotesStore.getState().loadProjects(current.storage_path);
+                await useNotesStore.getState().refreshNotes(current.storage_path);
                 useNotesStore.getState().setActiveFolder(folder, current.storage_path);
                 useNotesStore.getState().openTemporaryFile(path);
                 log(`Added folder ${folder} and opened file: ${path}`);
