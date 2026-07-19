@@ -175,6 +175,28 @@ function doRender() {
   if (window.__miaoyanSync) {
     setTimeout(function() { window.__miaoyanSync.rebuild(); }, 150);
   }
+  // Refresh TOC to match new content (tab switch)
+  if (window.tocbot && document.querySelector('.toc-nav')) {
+    var tocHeadings = document.querySelectorAll('#write h1, #write h2, #write h3');
+    var tocTrigger = document.querySelector('.toc-hover-trigger');
+    try { tocbot.destroy(); } catch(e) {}
+    if (tocHeadings.length >= 2) {
+      if (tocTrigger) tocTrigger.style.display = '';
+      tocbot.init({
+        tocSelector: '.toc-content',
+        contentSelector: '#write',
+        headingSelector: 'h1, h2, h3',
+        hasInnerContainers: true,
+        collapseDepth: 3,
+        scrollSmooth: true,
+        scrollSmoothDuration: 200,
+        headingsOffset: 80,
+        ignoreHiddenElements: true
+      });
+    } else {
+      if (tocTrigger) tocTrigger.style.display = 'none';
+    }
+  }
 }
 
 function setContent(html, isDark, previewWidth) {
