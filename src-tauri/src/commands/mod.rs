@@ -963,3 +963,35 @@ pub fn write_log(storage_path: String, message: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to write log: {}", e))?;
     Ok(())
 }
+
+/* ── Annotations ── */
+
+fn annotations_path(note_path: &str) -> String {
+    let p = Path::new(note_path);
+    let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+    let parent = p.parent().unwrap_or(Path::new(""));
+    parent.join(format!("{}.annotations.json", stem)).to_string_lossy().to_string()
+}
+
+#[command]
+pub fn read_annotations(note_path: String) -> String {
+    let path = annotations_path(&note_path);
+    fs::read_to_string(&path).unwrap_or_else(|_| "[]".to_string())
+}
+
+#[command]
+pub fn write_annotations(note_path: String, json: String) -> Result<(), String> {
+    let path = annotations_path(&note_path);
+    fs::write(&path, &json)
+        .map_err(|e| format!("Failed to write annotations: {}", e))
+}
+
+#[command]
+pub fn delete_annotations(note_path: String) -> Result<(), String> {
+    let path = annotations_path(&note_path);
+    if Path::new(&path).exists() {
+        fs::remove_file(&path)
+            .map_err(|e| format!("Failed to delete annotations: {}", e))?;
+    }
+    Ok(())
+}

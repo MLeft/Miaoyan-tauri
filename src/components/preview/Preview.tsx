@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNotesStore } from '../../stores/notes-store';
 import { useEditorStore } from '../../stores/editor-store';
 import { useSettingsStore } from '../../stores/settings-store';
-import { parseMarkdown } from '../../services/tauri-bridge';
+import { parseMarkdown, readAnnotations, writeAnnotations, deleteAnnotations } from '../../services/tauri-bridge';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import type { Annotation } from '../../types';
+import { AnnotationPanel } from './AnnotationPanel';
 
 function resolveImagePaths(html: string, notePath: string): string {
   // 获取笔记所在目录（处理 Windows 和 Unix 路径）
@@ -33,6 +35,14 @@ export function Preview() {
   const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // RAF throttle for editor→preview scroll sync
   const scrollSyncRafRef = useRef<number | null>(null);
+
+  // ── Annotation state ──
+  const [annotationMode, setAnnotationMode] = useState(false);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [showPanel, setShowPanel] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<{
+    quote: string; heading: string; paragraphIndex: number;
+  } | null>(null);
 
   const isDark = config.theme === 'dark' ||
     (config.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -129,10 +139,116 @@ export function Preview() {
           window.dispatchEvent(new CustomEvent('preview-scroll-to-line', { detail: { line } }));
         }
       }
+
+      // Annotation selection from iframe
+      if (e.data.type === 'annotation-selection') {
+        setPendingSelection({
+          quote: e.data.quote,
+          heading: e.data.heading || '',
+          paragraphIndex: e.data.paragraphIndex || 0,
+        });
+        setShowPanel(true);
+      }
+
+      // Annotation highlight clicked in iframe
+      if (e.data.type === 'annotation-click') {
+        // Scroll panel to the annotation (handled by panel)
+      }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
   }, [activeContent]);
+
+  // ── Load annotations when note changes ──
+  useEffect(() => {
+    if (!activeNote) { setAnnotations([]); return; }
+    readAnnotations(activeNote.path).then((json) => {
+      try {
+        const parsed = JSON.parse(json) as Annotation[];
+        setAnnotations(Array.isArray(parsed) ? parsed : []);
+      } catch { setAnnotations([]); }
+    }).catch(() => setAnnotations([]));
+  }, [activeNote?.path]);
+
+  // ── Send annotation mode to iframe ──
+  useEffect(() => {
+    if (!iframeReady) return;
+    iframeRef.current?.contentWindow?.postMessage({
+      type: 'setAnnotationMode', enabled: annotationMode,
+    }, '*');
+  }, [annotationMode, iframeReady]);
+
+  // ── Render highlights when annotations or content changes ──
+  useEffect(() => {
+    if (!iframeReady) return;
+    iframeRef.current?.contentWindow?.postMessage({
+      type: 'renderAnnotations', annotations,
+    }, '*');
+  }, [annotations, iframeReady, renderedHtml]);
+
+  // ── Persist annotations to disk ──
+  const persistAnnotations = useCallback(async (updated: Annotation[]) => {
+    if (!activeNote) return;
+    setAnnotations(updated);
+    if (updated.length === 0) {
+      await deleteAnnotations(activeNote.path).catch(() => {});
+    } else {
+      await writeAnnotations(activeNote.path, JSON.stringify(updated, null, 2)).catch(() => {});
+    }
+  }, [activeNote]);
+
+  // ── Annotation CRUD handlers ──
+  const handleAddAnnotation = useCallback((comment: string) => {
+    if (!pendingSelection) return;
+    const newAnn: Annotation = {
+      id: `ann-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      quote: pendingSelection.quote,
+      comment,
+      heading: pendingSelection.heading,
+      paragraphIndex: pendingSelection.paragraphIndex,
+      status: 'open',
+      createdAt: new Date().toISOString(),
+    };
+    persistAnnotations([...annotations, newAnn]);
+    setPendingSelection(null);
+  }, [pendingSelection, annotations, persistAnnotations]);
+
+  const handleDeleteAnnotation = useCallback((id: string) => {
+    persistAnnotations(annotations.filter(a => a.id !== id));
+  }, [annotations, persistAnnotations]);
+
+  const handleResolve = useCallback((id: string) => {
+    persistAnnotations(annotations.map(a => a.id === id ? { ...a, status: 'resolved' as const } : a));
+  }, [annotations, persistAnnotations]);
+
+  const handleReopen = useCallback((id: string) => {
+    persistAnnotations(annotations.map(a => a.id === id ? { ...a, status: 'open' as const } : a));
+  }, [annotations, persistAnnotations]);
+
+  const handleClearResolved = useCallback(() => {
+    persistAnnotations([]);
+    setShowPanel(false);
+    setAnnotationMode(false);
+  }, [persistAnnotations]);
+
+  const handleScrollTo = useCallback((id: string) => {
+    iframeRef.current?.contentWindow?.postMessage({ type: 'scrollToAnnotation', id }, '*');
+  }, []);
+
+  const handleCopyReport = useCallback(() => {
+    const lines = annotations.map((a, i) =>
+      `### 批注 #${i + 1}\n章节: ${a.heading || '(无)'}\n> 引用: ${a.quote}\n批注: ${a.comment}\n状态: ${a.status === 'resolved' ? '已处理' : '待处理'}`
+    );
+    const report = `# 文档批注报告\n\n文档: ${activeNote?.title || ''}\n批注数: ${annotations.length}\n\n---\n\n${lines.join('\n\n')}`;
+    navigator.clipboard.writeText(report).catch(() => {});
+  }, [annotations, activeNote]);
+
+  const toggleAnnotationMode = useCallback(() => {
+    const next = !annotationMode;
+    setAnnotationMode(next);
+    if (next) setShowPanel(true);
+    if (!next) setPendingSelection(null);
+  }, [annotationMode]);
 
   // Toggle checkbox in markdown source by index
   const toggleCheckbox = (index: number) => {
@@ -166,7 +282,40 @@ export function Preview() {
   if (!activeNote) return null;
 
   return (
-    <div className="h-full overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+    <div className="h-full overflow-hidden relative" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+      {/* Annotation mode toggle button */}
+      <button
+        onClick={toggleAnnotationMode}
+        className="absolute top-2 right-4 z-40 rounded-md cursor-pointer flex items-center justify-center"
+        style={{
+          width: '28px',
+          height: '28px',
+          backgroundColor: annotationMode ? 'var(--accent-icon, #2b6cb0)' : 'var(--bg-tertiary)',
+          color: annotationMode ? '#fff' : 'var(--text-secondary)',
+          border: '1px solid var(--border)',
+          fontSize: '14px',
+        }}
+        title={annotationMode ? '关闭批注模式' : '开启批注模式'}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+        {annotations.length > 0 && (
+          <span
+            className="absolute -top-1 -right-1 rounded-full flex items-center justify-center"
+            style={{
+              width: '14px', height: '14px',
+              backgroundColor: '#d69e2e',
+              color: '#fff',
+              fontSize: '9px',
+              fontWeight: 700,
+            }}
+          >
+            {annotations.length}
+          </span>
+        )}
+      </button>
+
       <iframe
         ref={iframeRef}
         src="/preview.html"
@@ -174,6 +323,22 @@ export function Preview() {
         title="preview"
         onLoad={handleIframeLoad}
       />
+
+      {/* Annotation Panel */}
+      {showPanel && (
+        <AnnotationPanel
+          annotations={annotations}
+          pendingSelection={pendingSelection}
+          onAdd={handleAddAnnotation}
+          onDelete={handleDeleteAnnotation}
+          onResolve={handleResolve}
+          onReopen={handleReopen}
+          onClearResolved={handleClearResolved}
+          onScrollTo={handleScrollTo}
+          onCopyReport={handleCopyReport}
+          onClose={() => { setShowPanel(false); setPendingSelection(null); }}
+        />
+      )}
     </div>
   );
 }

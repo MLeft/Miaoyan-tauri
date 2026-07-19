@@ -75,6 +75,9 @@ pub fn run() {
             reveal_in_finder,
             open_in_terminal,
             write_log,
+            read_annotations,
+            write_annotations,
+            delete_annotations,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

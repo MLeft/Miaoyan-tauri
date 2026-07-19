@@ -178,3 +178,17 @@ export async function revealInFinder(path: string): Promise<void> {
 export async function openInTerminal(path: string): Promise<void> {
   return invoke('open_in_terminal', { path });
 }
+
+/* ── Annotations ── */
+
+export async function readAnnotations(notePath: string): Promise<string> {
+  return invoke('read_annotations', { notePath });
+}
+
+export async function writeAnnotations(notePath: string, json: string): Promise<void> {
+  return invoke('write_annotations', { notePath, json });
+}
+
+export async function deleteAnnotations(notePath: string): Promise<void> {
+  return invoke('delete_annotations', { notePath });
+}

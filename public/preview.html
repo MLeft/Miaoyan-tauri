@@ -51,6 +51,21 @@
   }
 
   #write { margin: 0; max-width: 100%; padding: 0 28px 80px; box-sizing: border-box; }
+
+  /* Annotation highlights */
+  .ann-hl {
+    background: rgba(214,158,46,.18);
+    border-bottom: 2px solid #d69e2e;
+    border-radius: 2px;
+    cursor: pointer;
+    padding: 1px 0;
+    transition: background .2s;
+  }
+  .ann-hl:hover { background: rgba(214,158,46,.32); }
+  .ann-hl-resolved {
+    background: rgba(72,187,120,.12);
+    border-bottom: 2px solid #48bb78;
+  }
 </style>
 
 <link rel="stylesheet" href="/css/typography.css">
@@ -336,6 +351,124 @@ function getHeadings() {
   });
   return headings;
 }
+
+/* ── Annotation Module ── */
+(function() {
+  var annotationMode = false;
+
+  // Find nearest heading for a given element
+  function findNearestHeading(el) {
+    var node = el;
+    while (node && node.id !== 'write') {
+      var prev = node.previousElementSibling;
+      while (prev) {
+        if (/^H[1-6]$/.test(prev.tagName)) return prev.textContent.trim();
+        prev = prev.previousElementSibling;
+      }
+      node = node.parentElement;
+    }
+    return '';
+  }
+
+  // Find paragraph index of an element
+  function findParagraphIndex(el) {
+    var write = document.getElementById('write');
+    if (!write) return 0;
+    var blocks = write.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, table');
+    var node = el;
+    while (node && node.parentElement !== write) node = node.parentElement;
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i] === node || blocks[i].contains(el)) return i;
+    }
+    return 0;
+  }
+
+  // Listen for text selection
+  document.addEventListener('mouseup', function(e) {
+    if (!annotationMode) return;
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
+
+    var text = sel.toString().trim();
+    if (text.length < 2) return;
+
+    var range = sel.getRangeAt(0);
+    var anchor = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer;
+    var heading = findNearestHeading(anchor);
+    var paragraphIndex = findParagraphIndex(anchor);
+    var rect = range.getBoundingClientRect();
+
+    window.parent.postMessage({
+      type: 'annotation-selection',
+      quote: text,
+      heading: heading,
+      paragraphIndex: paragraphIndex,
+      rect: { top: rect.top, left: rect.left, bottom: rect.bottom }
+    }, '*');
+  });
+
+  // Highlight annotations in rendered content
+  function highlightAnnotations(annotations) {
+    // Remove existing highlights
+    document.querySelectorAll('.ann-hl, .ann-hl-resolved').forEach(function(el) {
+      var parent = el.parentNode;
+      parent.replaceChild(document.createTextNode(el.textContent), el);
+      parent.normalize();
+    });
+
+    if (!annotations || annotations.length === 0) return;
+
+    var write = document.getElementById('write');
+    if (!write) return;
+
+    annotations.forEach(function(ann) {
+      highlightQuote(write, ann.quote, ann.id, ann.status === 'resolved');
+    });
+  }
+
+  // Search and wrap quote text with highlight mark
+  function highlightQuote(root, quote, id, isResolved) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    var nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+
+    // Try to find the quote in text nodes
+    var searchStr = quote.length > 60 ? quote.substring(0, 60) : quote;
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      var idx = node.textContent.indexOf(searchStr);
+      if (idx >= 0) {
+        try {
+          var range = document.createRange();
+          range.setStart(node, idx);
+          range.setEnd(node, idx + searchStr.length);
+          var mark = document.createElement('mark');
+          mark.className = isResolved ? 'ann-hl ann-hl-resolved' : 'ann-hl';
+          mark.dataset.annId = id;
+          range.surroundContents(mark);
+          mark.addEventListener('click', function() {
+            window.parent.postMessage({ type: 'annotation-click', id: id }, '*');
+          });
+        } catch(e) { /* skip if range crosses element boundaries */ }
+        return;
+      }
+    }
+  }
+
+  // Handle messages from parent
+  window.addEventListener('message', function(e) {
+    if (!e.data) return;
+    if (e.data.type === 'setAnnotationMode') {
+      annotationMode = e.data.enabled;
+      document.body.style.cursor = annotationMode ? 'text' : '';
+    } else if (e.data.type === 'renderAnnotations') {
+      highlightAnnotations(e.data.annotations);
+    } else if (e.data.type === 'scrollToAnnotation') {
+      var el = document.querySelector('[data-ann-id="' + e.data.id + '"]');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+})();
 </script>
 </body>
 </html>

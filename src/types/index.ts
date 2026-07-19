@@ -52,3 +52,13 @@ export interface AppConfig {
 
 export type SortMode = 'modified' | 'created' | 'title' | 'custom';
 export type SortDirection = 'asc' | 'desc';
+
+export interface Annotation {
+  id: string;
+  quote: string;
+  comment: string;
+  heading: string;
+  paragraphIndex: number;
+  status: 'open' | 'resolved';
+  createdAt: string;
+}
