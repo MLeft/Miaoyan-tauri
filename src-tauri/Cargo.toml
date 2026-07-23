@@ -1,6 +1,6 @@
 [package]
 name = "miaoyan"
-version = "1.0.24"
+version = "1.0.25"
 description = "A cross-platform Markdown editor"
 authors = ["MiaoYan"]
 edition = "2021"

@@ -35,6 +35,13 @@ interface PendingSelection {
   paragraphIndex: number;
 }
 
+const IconEdit = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+  </svg>
+);
+
 interface AnnotationPanelProps {
   annotations: Annotation[];
   pendingSelection: PendingSelection | null;
@@ -42,6 +49,8 @@ interface AnnotationPanelProps {
   onDelete: (id: string) => void;
   onResolve: (id: string) => void;
   onReopen: (id: string) => void;
+  onEdit: (id: string, newComment: string) => void;
+  onCancelPending: () => void;
   onClearResolved: () => void;
   onScrollTo: (id: string) => void;
   onCopyReport: () => void;
@@ -55,13 +64,18 @@ export function AnnotationPanel({
   onDelete,
   onResolve,
   onReopen,
+  onEdit,
+  onCancelPending,
   onClearResolved,
   onScrollTo,
   onCopyReport,
   onClose,
 }: AnnotationPanelProps) {
   const [comment, setComment] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const resolvedCount = annotations.filter(a => a.status === 'resolved').length;
   const allResolved = annotations.length > 0 && resolvedCount === annotations.length;
 
@@ -84,6 +98,15 @@ export function AnnotationPanel({
       handleSubmit();
     }
   };
+
+  // Auto-resize edit textarea when entering edit mode
+  useEffect(() => {
+    if (editingId && editRef.current) {
+      const el = editRef.current;
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    }
+  }, [editingId]);
 
   return (
     <div
@@ -161,7 +184,14 @@ export function AnnotationPanel({
               color: 'var(--text-primary)',
             }}
           />
-          <div className="flex justify-end mt-1">
+          <div className="flex justify-end gap-1 mt-1">
+            <button
+              onClick={onCancelPending}
+              className="text-xs rounded cursor-pointer"
+              style={{ padding: '3px 10px', color: 'var(--text-secondary)' }}
+            >
+              取消
+            </button>
             <button
               onClick={handleSubmit}
               className="text-xs rounded cursor-pointer"
@@ -210,9 +240,54 @@ export function AnnotationPanel({
               {ann.quote.length > 50 ? ann.quote.substring(0, 50) + '…' : ann.quote}
             </div>
             {/* Comment */}
-            <div className="text-xs" style={{ color: 'var(--text-primary)' }}>
-              {ann.comment}
-            </div>
+            {editingId === ann.id ? (
+              <div onClick={(e) => e.stopPropagation()}>
+                <textarea
+                  ref={editRef}
+                  value={editText}
+                  onChange={(e) => {
+                    setEditText(e.target.value);
+                    const el = e.target;
+                    el.style.height = 'auto';
+                    el.style.height = el.scrollHeight + 'px';
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (editText.trim()) { onEdit(ann.id, editText.trim()); setEditingId(null); }
+                    }
+                    if (e.key === 'Escape') setEditingId(null);
+                  }}
+                  className="w-full text-xs rounded resize-none outline-none"
+                  autoFocus
+                  style={{
+                    padding: '4px 6px',
+                    backgroundColor: 'var(--bg-primary)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text-primary)',
+                    minHeight: '48px',
+                    maxHeight: '120px',
+                    overflow: 'auto',
+                  }}
+                />
+                <div className="flex justify-end gap-1 mt-1">
+                  <button
+                    onClick={() => setEditingId(null)}
+                    className="text-xs rounded cursor-pointer"
+                    style={{ padding: '2px 8px', color: 'var(--text-secondary)' }}
+                  >取消</button>
+                  <button
+                    onClick={() => { if (editText.trim()) { onEdit(ann.id, editText.trim()); setEditingId(null); } }}
+                    className="text-xs rounded cursor-pointer"
+                    style={{ padding: '2px 8px', backgroundColor: 'var(--accent-icon, #2b6cb0)', color: '#fff' }}
+                  >保存</button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs" style={{ color: 'var(--text-primary)' }}>
+                {ann.comment}
+              </div>
+            )}
             {/* Meta + actions */}
             <div className="flex items-center justify-between mt-1">
               <span className="text-xs" style={{ color: 'var(--text-muted, #999)', fontSize: '10px' }}>
@@ -238,6 +313,14 @@ export function AnnotationPanel({
                     <IconUndo />
                   </button>
                 )}
+                <button
+                  onClick={() => { setEditingId(ann.id); setEditText(ann.comment); }}
+                  className="cursor-pointer rounded flex items-center"
+                  style={{ padding: '1px 4px', color: 'var(--text-muted, #999)' }}
+                  title="编辑批注"
+                >
+                  <IconEdit />
+                </button>
                 <button
                   onClick={() => onDelete(ann.id)}
                   className="cursor-pointer rounded flex items-center"

@@ -225,6 +225,10 @@ export function Preview() {
     persistAnnotations(annotations.map(a => a.id === id ? { ...a, status: 'open' as const } : a));
   }, [annotations, persistAnnotations]);
 
+  const handleEditAnnotation = useCallback((id: string, newComment: string) => {
+    persistAnnotations(annotations.map(a => a.id === id ? { ...a, comment: newComment } : a));
+  }, [annotations, persistAnnotations]);
+
   const handleClearResolved = useCallback(() => {
     persistAnnotations([]);
     setShowPanel(false);
@@ -333,6 +337,8 @@ export function Preview() {
           onDelete={handleDeleteAnnotation}
           onResolve={handleResolve}
           onReopen={handleReopen}
+          onEdit={handleEditAnnotation}
+          onCancelPending={() => setPendingSelection(null)}
           onClearResolved={handleClearResolved}
           onScrollTo={handleScrollTo}
           onCopyReport={handleCopyReport}
