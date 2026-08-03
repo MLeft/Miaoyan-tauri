@@ -85,8 +85,10 @@ export function Preview() {
       html: processedHtml,
       isDark,
       previewWidth: viewMode === 'preview' ? 'full' : config.preview_width,
+      // HTML 文件以原始模式渲染，跳过 Markdown 后处理
+      raw: isHtmlFile,
     }, '*');
-  }, [renderedHtml, isDark, iframeReady, config.preview_width, viewMode]);
+  }, [renderedHtml, isDark, iframeReady, config.preview_width, viewMode, isHtmlFile]);
 
   // Send theme-only update when theme changes without content change
   useEffect(() => {
@@ -314,44 +316,15 @@ export function Preview() {
 
   if (!activeNote) return null;
 
-  // HTML 文件：直接渲染源码 + 右上角提供“用系统浏览器打开”
-  if (isHtmlFile) {
-    return (
-      <div className="h-full overflow-hidden relative" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-        <button
-          onClick={handleOpenInBrowser}
-          className="absolute top-2 right-4 z-40 rounded-md cursor-pointer flex items-center justify-center"
-          style={{
-            width: '28px',
-            height: '28px',
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border)',
-          }}
-          title="用系统浏览器打开"
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-            <polyline points="15 3 21 3 21 9" />
-            <line x1="10" y1="14" x2="21" y2="3" />
-          </svg>
-        </button>
-        <iframe
-          srcDoc={renderedHtml}
-          className="w-full h-full border-none"
-          title="html-preview"
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="h-full overflow-hidden relative" style={{ backgroundColor: 'var(--bg-secondary)' }}>
       {/* Annotation mode toggle button */}
       <button
         onClick={toggleAnnotationMode}
-        className="absolute top-2 right-4 z-40 rounded-md cursor-pointer flex items-center justify-center"
+        className="absolute top-2 z-40 rounded-md cursor-pointer flex items-center justify-center"
         style={{
+          // HTML 文件时右侧还需放“用系统浏览器打开”按钮，向左让位
+          right: isHtmlFile ? '44px' : '16px',
           width: '28px',
           height: '28px',
           backgroundColor: annotationMode ? 'var(--accent-icon, #2b6cb0)' : 'var(--bg-tertiary)',
@@ -379,6 +352,28 @@ export function Preview() {
           </span>
         )}
       </button>
+
+      {/* HTML 文件：用系统浏览器打开 */}
+      {isHtmlFile && (
+        <button
+          onClick={handleOpenInBrowser}
+          className="absolute top-2 right-4 z-40 rounded-md cursor-pointer flex items-center justify-center"
+          style={{
+            width: '28px',
+            height: '28px',
+            backgroundColor: 'var(--bg-tertiary)',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border)',
+          }}
+          title="用系统浏览器打开"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <polyline points="15 3 21 3 21 9" />
+            <line x1="10" y1="14" x2="21" y2="3" />
+          </svg>
+        </button>
+      )}
 
       <iframe
         ref={iframeRef}
