@@ -65,7 +65,7 @@ pub fn scan_notes(root_path: &Path) -> Vec<NoteMetadata> {
             .to_string_lossy()
             .to_lowercase();
         
-        if ext != "md" && ext != "markdown" && ext != "txt" && !is_encrypted_file(path) {
+        if ext != "md" && ext != "markdown" && ext != "txt" && ext != "html" && ext != "htm" && !is_encrypted_file(path) {
             continue;
         }
 
@@ -102,7 +102,7 @@ pub fn scan_notes_in_folder(folder_path: &Path, root_path: &Path) -> Vec<NoteMet
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_lowercase();
-                if ext != "md" && ext != "markdown" && ext != "txt" && !is_encrypted_file(&path) {
+                if ext != "md" && ext != "markdown" && ext != "txt" && ext != "html" && ext != "htm" && !is_encrypted_file(&path) {
                     continue;
                 }
                 if let Some(name) = path.file_name() {

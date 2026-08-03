@@ -29,6 +29,43 @@ const IconFile = () => (
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
   </svg>
 );
+/* Markdown 格式图标（M + 下箭头） */
+const IconFileMd = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="5" width="20" height="14" rx="2" />
+    <path d="M6 15v-6l3 3.5L12 8.5v6" />
+    <path d="M17 9v4.5" /><path d="M15 12l2 2 2-2" />
+  </svg>
+);
+/* HTML 格式图标（尖括号） */
+const IconFileHtml = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="8 6 3 12 8 18" />
+    <polyline points="16 6 21 12 16 18" />
+  </svg>
+);
+/* 纯文本格式图标（文档 + 横线） */
+const IconFileTxt = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+    <line x1="8" y1="13" x2="16" y2="13" /><line x1="8" y1="17" x2="16" y2="17" />
+  </svg>
+);
+
+/* 根据文件后缀返回对应的格式图标与颜色，方便一眼区分文件类型 */
+function getFileTypeIcon(path: string): { icon: React.ReactNode; color: string } {
+  const lower = path.toLowerCase();
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+    return { icon: <IconFileMd />, color: '#519aba' };
+  }
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+    return { icon: <IconFileHtml />, color: '#e37933' };
+  }
+  if (lower.endsWith('.txt')) {
+    return { icon: <IconFileTxt />, color: 'var(--text-tertiary)' };
+  }
+  return { icon: <IconFile />, color: 'var(--text-tertiary)' };
+}
 const IconChevronRight = () => (
   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="9 18 15 12 9 6" />
@@ -373,6 +410,7 @@ export function UnifiedTree() {
   const renderNoteRow = (note: NoteMetadata, depth: number) => {
     const isActive = activeNote?.id === note.id;
     const isRenaming = renamingNoteId === note.id;
+    const typeIcon = getFileTypeIcon(note.path);
     return (
       <div
         key={`note-${note.id}`}
@@ -388,7 +426,7 @@ export function UnifiedTree() {
         onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
       >
-        <span className="flex-shrink-0 opacity-40"><IconFile /></span>
+        <span className="flex-shrink-0 flex items-center" style={{ color: typeIcon.color, opacity: 0.85 }}>{typeIcon.icon}</span>
         {note.is_encrypted && <span className="flex-shrink-0" style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}><IconLockSmall /></span>}
         {isRenaming ? (
           <input

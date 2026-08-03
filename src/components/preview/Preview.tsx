@@ -4,6 +4,7 @@ import { useEditorStore } from '../../stores/editor-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import { parseMarkdown, readAnnotations, writeAnnotations, deleteAnnotations } from '../../services/tauri-bridge';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { openPath } from '@tauri-apps/plugin-opener';
 import type { Annotation } from '../../types';
 import { AnnotationPanel } from './AnnotationPanel';
 
@@ -47,6 +48,8 @@ export function Preview() {
   const isDark = config.theme === 'dark' ||
     (config.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
+  const isHtmlFile = !!activeNote && /\.(html|htm)$/i.test(activeNote.path);
+
   const handleIframeLoad = () => {
     setIframeReady(true);
   };
@@ -57,6 +60,11 @@ export function Preview() {
     if (renderTimer.current) clearTimeout(renderTimer.current);
     renderTimer.current = setTimeout(async () => {
       try {
+        if (isHtmlFile) {
+          // HTML 文件直接渲染源码，不走 Markdown 解析
+          setRenderedHtml(activeContent);
+          return;
+        }
         const html = await parseMarkdown(activeContent);
         setRenderedHtml(html);
       } catch (e) {
@@ -64,7 +72,7 @@ export function Preview() {
       }
     }, 150);
     return () => { if (renderTimer.current) clearTimeout(renderTimer.current); };
-  }, [activeContent, activeNote?.id]);
+  }, [activeContent, activeNote?.id, isHtmlFile]);
 
   // Send HTML content + theme + config to iframe via postMessage
   useEffect(() => {
@@ -153,6 +161,11 @@ export function Preview() {
       // Annotation highlight clicked in iframe
       if (e.data.type === 'annotation-click') {
         // Scroll panel to the annotation (handled by panel)
+      }
+
+      // Copy from annotation popup in iframe
+      if (e.data.type === 'annotation-copy') {
+        window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '复制成功' } }));
       }
     };
     window.addEventListener('message', handler);
@@ -244,7 +257,9 @@ export function Preview() {
       `### 批注 #${i + 1}\n章节: ${a.heading || '(无)'}\n> 引用: ${a.quote}\n批注: ${a.comment}\n状态: ${a.status === 'resolved' ? '已处理' : '待处理'}`
     );
     const report = `# 文档批注报告\n\n文档: ${activeNote?.title || ''}\n批注数: ${annotations.length}\n\n---\n\n${lines.join('\n\n')}`;
-    navigator.clipboard.writeText(report).catch(() => {});
+    navigator.clipboard.writeText(report).then(() => {
+      window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '复制成功' } }));
+    }).catch(() => {});
   }, [annotations, activeNote]);
 
   const toggleAnnotationMode = useCallback(() => {
@@ -253,6 +268,20 @@ export function Preview() {
     if (next) setShowPanel(true);
     if (!next) setPendingSelection(null);
   }, [annotationMode]);
+
+  // Open HTML file in system default browser
+  const handleOpenInBrowser = useCallback(async () => {
+    if (!activeNote) return;
+    try {
+      // 打开前先保存未保存的修改，确保浏览器看到最新内容
+      if (useNotesStore.getState().isDirty) {
+        await useNotesStore.getState().saveCurrentNote();
+      }
+      await openPath(activeNote.path);
+    } catch (e) {
+      console.error('Failed to open in browser:', e);
+    }
+  }, [activeNote]);
 
   // Toggle checkbox in markdown source by index
   const toggleCheckbox = (index: number) => {
@@ -284,6 +313,37 @@ export function Preview() {
   };
 
   if (!activeNote) return null;
+
+  // HTML 文件：直接渲染源码 + 右上角提供“用系统浏览器打开”
+  if (isHtmlFile) {
+    return (
+      <div className="h-full overflow-hidden relative" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+        <button
+          onClick={handleOpenInBrowser}
+          className="absolute top-2 right-4 z-40 rounded-md cursor-pointer flex items-center justify-center"
+          style={{
+            width: '28px',
+            height: '28px',
+            backgroundColor: 'var(--bg-tertiary)',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border)',
+          }}
+          title="用系统浏览器打开"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <polyline points="15 3 21 3 21 9" />
+            <line x1="10" y1="14" x2="21" y2="3" />
+          </svg>
+        </button>
+        <iframe
+          srcDoc={renderedHtml}
+          className="w-full h-full border-none"
+          title="html-preview"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-hidden relative" style={{ backgroundColor: 'var(--bg-secondary)' }}>

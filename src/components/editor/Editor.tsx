@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { EditorState, Compartment } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { html } from '@codemirror/lang-html';
 import { languages } from '@codemirror/language-data';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentOnInput } from '@codemirror/language';
@@ -19,6 +20,7 @@ import { imagePreviewExtension } from './extensions/image-preview';
 import { ContextMenu } from './ContextMenu';
 
 const themeCompartment = new Compartment();
+const langCompartment = new Compartment();
 
 function getEditorTheme(isDark: boolean, config: { line_height: number; line_spacing: number; letter_spacing: number }) {
   return EditorView.theme({
@@ -105,6 +107,8 @@ export function Editor() {
   const isDark = config.theme === 'dark' ||
     (config.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
+  const isHtmlFile = !!activeNote && /\.(html|htm)$/i.test(activeNote.path);
+
   // Initialize editor
   useEffect(() => {
     if (!editorRef.current) return;
@@ -120,7 +124,7 @@ export function Editor() {
         bracketMatching(),
         highlightSelectionMatches(),
         tabSnippets(),
-        markdown({ base: markdownLanguage, codeLanguages: languages }),
+        langCompartment.of(isHtmlFile ? html() : markdown({ base: markdownLanguage, codeLanguages: languages })),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         wikilinks(),
         imagePasteExtension(() => activeNote?.path ?? null),

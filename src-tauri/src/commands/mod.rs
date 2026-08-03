@@ -65,7 +65,7 @@ pub fn write_note(path: String, content: String) -> Result<(), String> {
 #[command]
 pub fn create_note(folder_path: String, title: String) -> Result<NoteMetadata, String> {
     // Use title as-is if it already has a supported extension, otherwise append .md
-    let file_name = if title.ends_with(".md") || title.ends_with(".markdown") || title.ends_with(".txt") {
+    let file_name = if title.ends_with(".md") || title.ends_with(".markdown") || title.ends_with(".txt") || title.ends_with(".html") || title.ends_with(".htm") {
         title.clone()
     } else {
         format!("{}.md", title)

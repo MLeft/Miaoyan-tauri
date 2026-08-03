@@ -302,12 +302,25 @@ export default function App() {
   const [showExport, setShowExport] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
+
+  // Listen for global show-toast events (from Preview, iframe, etc.)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const msg = (e as CustomEvent).detail?.message;
+      if (msg) { setToastMessage(msg); setToastVisible(true); }
+    };
+    window.addEventListener('show-toast', handler);
+    return () => window.removeEventListener('show-toast', handler);
+  }, []);
   const [showUpdate, setShowUpdate] = useState(false);
   const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
   const [appVersion, setAppVersion] = useState('');
 
   const handleFormat = async () => {    const content = useNotesStore.getState().activeContent;
     if (!content) return;
+    // HTML 文件不适用 Markdown 排版
+    const activeNote = useNotesStore.getState().activeNote;
+    if (activeNote && /\.(html|htm)$/i.test(activeNote.path)) return;
     try {
       const formatted = await formatMarkdown(content);
       useNotesStore.getState().updateContent(formatted, '');
