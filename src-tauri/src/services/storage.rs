@@ -49,6 +49,10 @@ pub fn scan_notes(root_path: &Path) -> Vec<NoteMetadata> {
     for entry in WalkDir::new(root_path)
         .into_iter()
         .filter_entry(|e| {
+            // 根目录始终放行：额外文件夹本身可能是隐藏目录（如 .multica）
+            if e.depth() == 0 {
+                return true;
+            }
             // Skip hidden directories and Trash folder
             let name = e.file_name().to_string_lossy();
             !name.starts_with('.') && name != "Trash"

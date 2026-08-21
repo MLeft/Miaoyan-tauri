@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { listen } from '@tauri-apps/api/event';
 import type { Project, NoteMetadata } from '../../types';
 import { useNotesStore } from '../../stores/notes-store';
@@ -172,12 +173,19 @@ export function UnifiedTree() {
   const { t } = useTranslation();
   const {
     projects, activeNote,
-    selectNote, searchQuery, setSearchQuery,
-    isLoading, refreshNotes, loadProjects,
+    selectNote,
+    isLoading, loadProjects,
     encryptionDialog, setEncryptionDialog, onNoteUnlocked,
-    expandedFolders, allNotesExpanded,
+    expandedFolders, allNotesExpanded, searchQuery,
     toggleExpandedFolder, setAllNotesExpanded, clearExpandedFolders,
-  } = useNotesStore();
+  } = useNotesStore(useShallow((s) => ({
+    projects: s.projects, activeNote: s.activeNote,
+    selectNote: s.selectNote,
+    isLoading: s.isLoading, loadProjects: s.loadProjects,
+    encryptionDialog: s.encryptionDialog, setEncryptionDialog: s.setEncryptionDialog, onNoteUnlocked: s.onNoteUnlocked,
+    expandedFolders: s.expandedFolders, allNotesExpanded: s.allNotesExpanded, searchQuery: s.searchQuery,
+    toggleExpandedFolder: s.toggleExpandedFolder, setAllNotesExpanded: s.setAllNotesExpanded, clearExpandedFolders: s.clearExpandedFolders,
+  })));
   const { config } = useSettingsStore();
 
   const [contextMenu, setContextMenu] = useState<TreeContextMenu>(null);
@@ -186,6 +194,8 @@ export function UnifiedTree() {
   const [renamingFolderPath, setRenamingFolderPath] = useState<string | null>(null);
   const [renameFolderValue, setRenameFolderValue] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  // 本地搜索输入：纯前端标题过滤，避免每次按键触发 Rust 全文扫描
+  const [searchInput, setSearchInput] = useState('');
 
   /* ── Local cache of ALL notes (not filtered by active folder) ── */
   const [allNotes, setAllNotes] = useState<NoteMetadata[]>([]);
@@ -195,17 +205,18 @@ export function UnifiedTree() {
       const cfg = useSettingsStore.getState().config;
       const loaded = await getAllNotes(cfg.storage_path, cfg.extra_folders || []);
       setAllNotes(loaded);
+      useNotesStore.getState().setNotesFromCache(loaded);
     } catch (e) { console.error('Failed to load all notes:', e); }
   }, []);
 
   // Load all notes on mount, when storage path changes, or when extra folders change
   useEffect(() => { reloadAllNotes(); }, [config.storage_path, config.extra_folders, reloadAllNotes]);
 
-  /* ── Refresh both store notes and local all-notes cache ── */
+  /* ── Refresh local cache + store notes + projects (single disk scan) ── */
   const handleRefreshAll = useCallback(async () => {
-    await refreshNotes(config.storage_path);
     await reloadAllNotes();
-  }, [refreshNotes, config.storage_path, reloadAllNotes]);
+    await loadProjects(config.storage_path);
+  }, [reloadAllNotes, loadProjects, config.storage_path]);
 
   /* ── Watch filesystem changes ── */
   useEffect(() => {
@@ -221,7 +232,6 @@ export function UnifiedTree() {
       // Debounce: wait 500ms after last event before refreshing
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
-        await refreshNotes(config.storage_path);
         await reloadAllNotes();
         await loadProjects(config.storage_path);
         // Reload content of open tabs if their files changed externally
@@ -235,14 +245,22 @@ export function UnifiedTree() {
       if (debounceTimer) clearTimeout(debounceTimer);
       unlisten.then(fn => fn());
     };
-  }, [config.storage_path, config.extra_folders, refreshNotes, reloadAllNotes, loadProjects]);
+  }, [config.storage_path, config.extra_folders, reloadAllNotes, loadProjects]);
+
+  /* ── Sync external search query (e.g. deep link) into local input ── */
+  useEffect(() => {
+    if (document.activeElement !== searchRef.current && searchQuery !== searchInput) {
+      setSearchInput(searchQuery);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
 
   /* ── Search filter (local, by title) ── */
   const filteredNotes = useMemo(() => {
-    if (!searchQuery.trim()) return allNotes;
-    const q = searchQuery.toLowerCase();
+    const q = searchInput.trim().toLowerCase();
+    if (!q) return allNotes;
     return allNotes.filter(n => n.title.toLowerCase().includes(q));
-  }, [allNotes, searchQuery]);
+  }, [allNotes, searchInput]);
 
   /* ── Group notes by parent folder path ── */
   const notesByFolder = useMemo(() => {
@@ -258,17 +276,23 @@ export function UnifiedTree() {
   const getNotesFor = useCallback((folderPath: string) =>
     notesByFolder[folderPath] || [], [notesByFolder]);
 
-  /* ── Count notes in folder (including subfolders) ── */
-  const countNotesIn = useCallback((folderPath: string): number => {
-    let count = (notesByFolder[folderPath] || []).length;
-    // Recursively count subfolders
-    const sep = folderPath.includes('\\') ? '\\' : '/';
-    const prefix = folderPath + sep;
-    for (const key of Object.keys(notesByFolder)) {
-      if (key.startsWith(prefix)) count += notesByFolder[key].length;
+  /* ── Precomputed note counts per folder (including subfolders) ── */
+  const folderCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const [folder, list] of Object.entries(notesByFolder)) {
+      let cur = folder;
+      for (;;) {
+        counts[cur] = (counts[cur] || 0) + list.length;
+        const idx = Math.max(cur.lastIndexOf('\\'), cur.lastIndexOf('/'));
+        if (idx <= 0) break;
+        cur = cur.slice(0, idx);
+      }
     }
-    return count;
+    return counts;
   }, [notesByFolder]);
+
+  const countNotesIn = useCallback((folderPath: string) =>
+    folderCounts[folderPath] || 0, [folderCounts]);
 
   /* ── Toggle folder expand ── */
   const toggleFolderExpand = useCallback((path: string) => {
@@ -462,20 +486,20 @@ export function UnifiedTree() {
   }, [notesByFolder]);
 
   /* ── Persist expanded folders when search is cleared ── */
-  const prevSearchRef = useRef(searchQuery);
+  const prevSearchRef = useRef(searchInput);
   useEffect(() => {
     const prev = prevSearchRef.current.trim();
-    const curr = searchQuery.trim();
-    prevSearchRef.current = searchQuery;
+    const curr = searchInput.trim();
+    prevSearchRef.current = searchInput;
     if (prev && !curr) {
       // No folder selected → collapse all auto-expanded folders
         clearExpandedFolders();
     }
-  }, [searchQuery, projects, folderMatchesSearch, clearExpandedFolders]);
+  }, [searchInput, clearExpandedFolders]);
 
   /* ── Render a folder row (recursive) ── */
   const renderFolderRow = (project: Project, depth: number) => {
-    const query = searchQuery.trim();
+    const query = searchInput.trim();
     // During search, skip folders that don't match
     if (query && !folderMatchesSearch(project, query)) return null;
 
@@ -588,8 +612,8 @@ export function UnifiedTree() {
             <input
               ref={searchRef}
               type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value, config.storage_path)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder={t('notesList.search')}
               className="flex-1 bg-transparent outline-none text-xs"
               style={{ color: 'var(--text-primary)' }}
@@ -634,7 +658,7 @@ export function UnifiedTree() {
         {/* Loading / Empty */}
         {isLoading && allNotes.length === 0 ? (
           <div className="flex items-center justify-center h-12 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>Loading...</div>
-        ) : filteredNotes.length === 0 && searchQuery ? (
+        ) : filteredNotes.length === 0 && searchInput.trim() ? (
           <div className="flex items-center justify-center h-12 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {t('notesList.noResults')}
           </div>

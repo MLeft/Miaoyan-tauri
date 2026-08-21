@@ -197,7 +197,7 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
 
 function EditorPane() {
   const { viewMode, showToc, toggleToc } = useEditorStore();
-  const { activeNote } = useNotesStore();
+  const activeNote = useNotesStore((s) => s.activeNote);
   const { config } = useSettingsStore();
   const [showBacklinks, setShowBacklinks] = useState(false);
 
@@ -295,7 +295,8 @@ function WelcomeScreen() {
 export default function App() {
   const { t } = useTranslation();
   const { config, loaded, loadConfig } = useSettingsStore();
-  const { loadProjects, loadNotes } = useNotesStore();
+  const loadProjects = useNotesStore((s) => s.loadProjects);
+  const loadNotes = useNotesStore((s) => s.loadNotes);
   const [themeClass, setThemeClass] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showPresentation, setShowPresentation] = useState(false);

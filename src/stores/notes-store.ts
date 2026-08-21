@@ -66,6 +66,7 @@ interface NotesState {
   setSortMode: (mode: SortMode) => void;
   toggleSortDirection: () => void;
   refreshNotes: (rootPath: string) => Promise<void>;
+  setNotesFromCache: (loaded: NoteMetadata[]) => void;
   duplicateNote: (rootPath: string) => Promise<void>;
   loadCustomSortOrder: (rootPath: string, folder: string | null) => Promise<void>;
   applyCustomSortOrder: (rootPath: string, folder: string | null, noteIds: string[]) => Promise<void>;
@@ -608,6 +609,19 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       await get().loadNotes(rootPath);
     }
     await get().loadProjects(rootPath);
+  },
+
+  setNotesFromCache: (loaded) => {
+    // 用已扫描的全量笔记更新 store.notes，避免重复磁盘扫描
+    const { activeFolder, searchQuery } = get();
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      set({ notes: loaded.filter(n => n.title.toLowerCase().includes(q)) });
+    } else if (activeFolder) {
+      set({ notes: loaded.filter(n => n.path.startsWith(activeFolder + '\\') || n.path.startsWith(activeFolder + '/')) });
+    } else {
+      set({ notes: loaded });
+    }
   },
 
   duplicateNote: async (rootPath) => {
