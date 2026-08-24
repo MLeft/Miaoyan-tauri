@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { listen } from '@tauri-apps/api/event';
 import type { Project, NoteMetadata } from '../../types';
 import { useNotesStore } from '../../stores/notes-store';
@@ -7,12 +8,13 @@ import { useSettingsStore } from '../../stores/settings-store';
 import {
   createNote, deleteNote, renameNote,
   createFolder, moveNote, renameFolder, deleteFolder,
-  revealInFinder, openInTerminal, getAllNotes,
+  revealInFinder, openInTerminal, getAllNotes, getNotesMetadata,
   startWatching,
 } from '../../services/tauri-bridge';
 import { useTranslation } from 'react-i18next';
 import { SyncStatusIndicator } from '../shared/SyncStatus';
 import { EncryptionDialog } from '../shared/EncryptionDialog';
+import { perfReport } from '../../services/perf';
 
 /* ── SVG Icons ── */
 const IconHome = () => (
@@ -134,6 +136,12 @@ function getParentPath(notePath: string): string {
   return i >= 0 ? notePath.substring(0, i) : '';
 }
 
+/* 判断是否为笔记文件路径（区分文件级事件与目录级事件） */
+function isNoteFilePath(p: string): boolean {
+  const lower = p.toLowerCase();
+  return /\.(md|markdown|txt|html|htm)$/.test(lower) || lower.endsWith('.md.encrypted');
+}
+
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -199,11 +207,17 @@ export function UnifiedTree() {
 
   /* ── Local cache of ALL notes (not filtered by active folder) ── */
   const [allNotes, setAllNotes] = useState<NoteMetadata[]>([]);
+  const allNotesRef = useRef(allNotes);
+  useEffect(() => { allNotesRef.current = allNotes; }, [allNotes]);
 
   const reloadAllNotes = useCallback(async () => {
     try {
       const cfg = useSettingsStore.getState().config;
+      const t0 = performance.now();
       const loaded = await getAllNotes(cfg.storage_path, cfg.extra_folders || []);
+      // 启动/全量刷新链路：目录扫描超过 200ms 记录
+      const dt = performance.now() - t0;
+      if (dt > 200) perfReport('scan-notes', dt, `count=${loaded.length}`);
       setAllNotes(loaded);
       useNotesStore.getState().setNotesFromCache(loaded);
     } catch (e) { console.error('Failed to load all notes:', e); }
@@ -221,6 +235,8 @@ export function UnifiedTree() {
   /* ── Watch filesystem changes ── */
   useEffect(() => {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingFiles = new Map<string, string>(); // path -> 最近事件类型
+    let needsFull = false;
 
     // Start watching storage path + extra folders
     const watchPaths = [config.storage_path, ...(config.extra_folders || [])].filter(Boolean);
@@ -228,17 +244,71 @@ export function UnifiedTree() {
       startWatching(watchPaths).catch(e => console.error('Failed to start watcher:', e));
     }
 
+    // 文件级增量更新：只对变更文件取元数据，不重扫目录树
+    const applyIncremental = async (files: Map<string, string>) => {
+      try {
+        const cfg = useSettingsStore.getState().config;
+        const paths = [...files.keys()];
+        const probePaths = paths.filter(p => files.get(p) !== 'remove');
+        const upserted = probePaths.length
+          ? await getNotesMetadata(probePaths, cfg.storage_path, cfg.extra_folders || [])
+          : [];
+        const upsertedSet = new Set(upserted.map(n => n.path.replace(/\\/g, '/')));
+        const removedSet = new Set(
+          paths.filter(p => files.get(p) === 'remove').map(p => p.replace(/\\/g, '/'))
+        );
+        // create/modify 事件但文件已读不到 → 视为删除
+        for (const p of probePaths) {
+          if (!upsertedSet.has(p.replace(/\\/g, '/'))) removedSet.add(p.replace(/\\/g, '/'));
+        }
+        const prev = allNotesRef.current;
+        const next = [
+          ...prev.filter(n => {
+            const key = n.path.replace(/\\/g, '/');
+            return !removedSet.has(key) && !upsertedSet.has(key);
+          }),
+          ...upserted,
+        ].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
+        allNotesRef.current = next;
+        setAllNotes(next);
+        useNotesStore.getState().setNotesFromCache(next);
+        // 外部变更的打开标签重载内容
+        useNotesStore.getState().reloadOpenTabs(paths);
+      } catch (e) {
+        console.error('Incremental refresh failed, falling back to full scan:', e);
+        await reloadAllNotes();
+      }
+    };
+
     const unlisten = listen<{ type: string; paths: string[] }>('fs-change', (event) => {
-      // Debounce: wait 500ms after last event before refreshing
+      // 吞掉应用自身写入的回环事件（自动保存不再触发任何刷新）
+      const external = event.payload.paths.filter(p => !useNotesStore.getState().consumeRecentWrite(p));
+      if (external.length === 0) return;
+
+      for (const p of external) {
+        if (isNoteFilePath(p)) {
+          pendingFiles.set(p, event.payload.type);
+        } else {
+          needsFull = true; // 目录级变更（新建/重命名/删除文件夹）才需全量刷新
+        }
+      }
+
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
-        await reloadAllNotes();
-        await loadProjects(config.storage_path);
-        // Reload content of open tabs if their files changed externally
-        if (event.payload.paths.length > 0) {
-          useNotesStore.getState().reloadOpenTabs(event.payload.paths);
+        const files = pendingFiles;
+        pendingFiles = new Map();
+        const full = needsFull;
+        needsFull = false;
+        if (full) {
+          await reloadAllNotes();
+          await loadProjects(config.storage_path);
+          if (files.size > 0) {
+            useNotesStore.getState().reloadOpenTabs([...files.keys()]);
+          }
+        } else if (files.size > 0) {
+          await applyIncremental(files);
         }
-      }, 500);
+      }, 400);
     });
 
     return () => {
@@ -272,9 +342,6 @@ export function UnifiedTree() {
     }
     return map;
   }, [filteredNotes]);
-
-  const getNotesFor = useCallback((folderPath: string) =>
-    notesByFolder[folderPath] || [], [notesByFolder]);
 
   /* ── Precomputed note counts per folder (including subfolders) ── */
   const folderCounts = useMemo(() => {
@@ -497,107 +564,115 @@ export function UnifiedTree() {
     }
   }, [searchInput, clearExpandedFolders]);
 
-  /* ── Render a folder row (recursive) ── */
+  /* ── Flatten visible rows for virtualized rendering ── */
+  type TreeRow =
+    | { kind: 'folder'; project: Project; depth: number }
+    | { kind: 'note'; note: NoteMetadata; depth: number };
+
+  const rows = useMemo<TreeRow[]>(() => {
+    const out: TreeRow[] = [];
+    if (!allNotesExpanded) return out;
+    const q = searchInput.trim();
+    const walk = (project: Project, depth: number) => {
+      if (q && !folderMatchesSearch(project, q)) return;
+      out.push({ kind: 'folder', project, depth });
+      const isExpanded = q ? true : expandedFolders.includes(project.path);
+      if (isExpanded) {
+        project.children.forEach(child => walk(child, depth + 1));
+        (notesByFolder[project.path] || []).forEach(note => out.push({ kind: 'note', note, depth: depth + 1 }));
+      }
+    };
+    projects.forEach(p => walk(p, 0));
+    (notesByFolder[config.storage_path] || []).forEach(note => out.push({ kind: 'note', note, depth: 0 }));
+    return out;
+  }, [allNotesExpanded, searchInput, folderMatchesSearch, expandedFolders, notesByFolder, projects, config.storage_path]);
+
+  const treeRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => treeRef.current,
+    estimateSize: () => 26,
+    overscan: 20,
+  });
+
+  /* ── Render a folder row (content only; recursion handled by rows flattening) ── */
   const renderFolderRow = (project: Project, depth: number) => {
     const query = searchInput.trim();
-    // During search, skip folders that don't match
-    if (query && !folderMatchesSearch(project, query)) return null;
-
     const isExpanded = query ? true : expandedFolders.includes(project.path);
     const isActive = false;
     const isRenaming = renamingFolderPath === project.path;
-    const folderNotes = getNotesFor(project.path);
     const noteCount = countNotesIn(project.path);
 
     return (
-      <div key={`folder-${project.path}`}>
-        <div
-          className="group flex items-center gap-1 cursor-pointer text-xs transition-colors"
-          style={rowStyle(depth, isActive)}
-          onClick={() => toggleFolderExpand(project.path)}
-          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (!isActive) e.currentTarget.style.backgroundColor = 'var(--accent-light)'; }}
-          onDragLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-          onDrop={async (e) => {
-            e.preventDefault(); e.stopPropagation();
-            const notePath = e.dataTransfer.getData('application/note-path');
-            if (notePath) {
-              try {
-                await moveNote(notePath, project.path);
-                await handleRefreshAll();
-                await loadProjects(config.storage_path);
-              } catch (err) { console.error('Failed to move note:', err); }
-            }
-            e.currentTarget.style.backgroundColor = isActive ? 'var(--accent-light)' : 'transparent';
-          }}
-          onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, type: 'folder', project }); }}
-          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
-          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+      <div
+        className="group flex items-center gap-1 cursor-pointer text-xs transition-colors"
+        style={rowStyle(depth, isActive)}
+        onClick={() => toggleFolderExpand(project.path)}
+        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (!isActive) e.currentTarget.style.backgroundColor = 'var(--accent-light)'; }}
+        onDragLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+        onDrop={async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const notePath = e.dataTransfer.getData('application/note-path');
+          if (notePath) {
+            try {
+              await moveNote(notePath, project.path);
+              await handleRefreshAll();
+              await loadProjects(config.storage_path);
+            } catch (err) { console.error('Failed to move note:', err); }
+          }
+          e.currentTarget.style.backgroundColor = isActive ? 'var(--accent-light)' : 'transparent';
+        }}
+        onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, type: 'folder', project }); }}
+        onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
+        onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+      >
+        <span
+          className="w-3 h-3 flex items-center justify-center flex-shrink-0 opacity-50"
+          onClick={(e) => { e.stopPropagation(); toggleFolderExpand(project.path); }}
         >
-          <span
-            className="w-3 h-3 flex items-center justify-center flex-shrink-0 opacity-50"
-            onClick={(e) => { e.stopPropagation(); toggleFolderExpand(project.path); }}
+          {isExpanded ? <IconChevronDown /> : <IconChevronRight />}
+        </span>
+        <span className="flex-shrink-0 opacity-60"><IconFolder /></span>
+        {isRenaming ? (
+          <input
+            autoFocus value={renameFolderValue}
+            onChange={(e) => setRenameFolderValue(e.target.value)}
+            onBlur={() => handleRenameFolderSubmit(project)}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenamingFolderPath(null); }}
+            className="truncate outline-none"
+            style={{
+              background: 'var(--bg-tertiary)', color: 'var(--text-primary)',
+              border: '1px solid var(--accent-icon)', borderRadius: '3px',
+              padding: '0 4px', fontSize: 'inherit', lineHeight: 'inherit',
+              width: '0', minWidth: '60px', flex: '1 1 auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="truncate">{project.name}</span>
+        )}
+        {noteCount > 0 && (
+          <span className="flex-shrink-0 text-[10px] ml-auto opacity-40">{noteCount}</span>
+        )}
+        {config.extra_folders.includes(project.path) && (
+          <button
+            className="flex-shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5"
+            style={{ color: 'var(--text-tertiary)' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              const newFolders = config.extra_folders.filter(f => f !== project.path);
+              useSettingsStore.getState().updateConfig({ extra_folders: newFolders });
+              loadProjects(config.storage_path);
+              handleRefreshAll();
+            }}
+            title="Remove from tree (keeps local files)"
           >
-            {isExpanded ? <IconChevronDown /> : <IconChevronRight />}
-          </span>
-          <span className="flex-shrink-0 opacity-60"><IconFolder /></span>
-          {isRenaming ? (
-            <input
-              autoFocus value={renameFolderValue}
-              onChange={(e) => setRenameFolderValue(e.target.value)}
-              onBlur={() => handleRenameFolderSubmit(project)}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenamingFolderPath(null); }}
-              className="truncate outline-none"
-              style={{
-                background: 'var(--bg-tertiary)', color: 'var(--text-primary)',
-                border: '1px solid var(--accent-icon)', borderRadius: '3px',
-                padding: '0 4px', fontSize: 'inherit', lineHeight: 'inherit',
-                width: '0', minWidth: '60px', flex: '1 1 auto',
-              }}
-              onClick={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <span className="truncate">{project.name}</span>
-          )}
-          {noteCount > 0 && (
-            <span className="flex-shrink-0 text-[10px] ml-auto opacity-40">{noteCount}</span>
-          )}
-          {config.extra_folders.includes(project.path) && (
-            <button
-              className="flex-shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5"
-              style={{ color: 'var(--text-tertiary)' }}
-              onClick={(e) => {
-                e.stopPropagation();
-                const newFolders = config.extra_folders.filter(f => f !== project.path);
-                useSettingsStore.getState().updateConfig({ extra_folders: newFolders });
-                loadProjects(config.storage_path);
-                handleRefreshAll();
-              }}
-              title="Remove from tree (keeps local files)"
-            >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          )}
-        </div>
-        {isExpanded && (
-          <>
-            {project.children.map(child => renderFolderRow(child, depth + 1))}
-            {folderNotes.map(note => renderNoteRow(note, depth + 1))}
-          </>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         )}
       </div>
-    );
-  };
-
-  /* ── Render All Notes expanded: projects + root notes ── */
-  const renderAllNotesContent = () => {
-    const rootNotes = getNotesFor(config.storage_path);
-    return (
-      <>
-        {projects.map(p => renderFolderRow(p, 0))}
-        {rootNotes.map(note => renderNoteRow(note, 0))}
-      </>
     );
   };
 
@@ -628,7 +703,7 @@ export function UnifiedTree() {
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-y-auto py-0.5">
+      <div ref={treeRef} className="flex-1 overflow-y-auto py-0.5">
         {/* All Notes */}
         <div
           className="flex items-center gap-1.5 cursor-pointer text-xs transition-colors"
@@ -652,8 +727,20 @@ export function UnifiedTree() {
           <span className="ml-auto text-[10px] opacity-50">{allNotes.length}</span>
         </div>
 
-        {/* Tree content */}
-        {allNotesExpanded && renderAllNotesContent()}
+        {/* Tree content (virtualized: only visible rows are mounted) */}
+        <div style={{ height: virtualizer.getTotalSize(), position: 'relative', overflow: 'hidden' }}>
+          {virtualizer.getVirtualItems().map((vi) => {
+            const row = rows[vi.index];
+            return (
+              <div
+                key={row.kind === 'folder' ? `folder-${row.project.path}` : `note-${row.note.id}`}
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: vi.size, transform: `translateY(${vi.start}px)` }}
+              >
+                {row.kind === 'folder' ? renderFolderRow(row.project, row.depth) : renderNoteRow(row.note, row.depth)}
+              </div>
+            );
+          })}
+        </div>
 
         {/* Loading / Empty */}
         {isLoading && allNotes.length === 0 ? (

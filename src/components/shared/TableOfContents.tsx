@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useNotesStore } from '../../stores/notes-store';
 
 interface TocItem {
@@ -13,7 +13,10 @@ interface Props {
 }
 
 export function TableOfContents({ onNavigate, onClose }: Props) {
-  const { activeContent, activeTabPath, openTabs } = useNotesStore();
+  // 窄订阅：只关注 TOC 需要的字段
+  const activeContent = useNotesStore((s) => s.activeContent);
+  const activeTabPath = useNotesStore((s) => s.activeTabPath);
+  const openTabs = useNotesStore((s) => s.openTabs);
 
   // Use activeContent as primary source; fall back to active tab's cached content
   const content = useMemo(() => {
@@ -25,9 +28,16 @@ export function TableOfContents({ onNavigate, onClose }: Props) {
     return '';
   }, [activeContent, activeTabPath, openTabs]);
 
+  // 防抖：停止输入 300ms 后才重新解析标题，避免每次按键全文切行
+  const [deferredContent, setDeferredContent] = useState(content);
+  useEffect(() => {
+    const timer = setTimeout(() => setDeferredContent(content), 300);
+    return () => clearTimeout(timer);
+  }, [content]);
+
   const headings = useMemo(() => {
-    if (!content) return [];
-    const lines = content.replace(/\r\n/g, '\n').split('\n');
+    if (!deferredContent) return [];
+    const lines = deferredContent.replace(/\r\n/g, '\n').split('\n');
     const items: TocItem[] = [];
     let inCodeBlock = false;
 
@@ -48,7 +58,7 @@ export function TableOfContents({ onNavigate, onClose }: Props) {
       }
     });
     return items;
-  }, [content]);
+  }, [deferredContent]);
 
   if (headings.length === 0) {
     return (

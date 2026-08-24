@@ -33,8 +33,12 @@ export function Backlinks({ noteTitle, rootPath, onNavigate, visible }: Backlink
   }, [noteTitle, rootPath]);
 
   useEffect(() => {
-    fetchBacklinks();
-  }, [fetchBacklinks]);
+    // 面板不可见时不扫描（get_backlinks 会读全部笔记内容，代价很高）；
+    // 可见且笔记变化后防抖 400ms 再拉取
+    if (!visible) return;
+    const timer = setTimeout(() => { fetchBacklinks(); }, 400);
+    return () => clearTimeout(timer);
+  }, [fetchBacklinks, visible]);
 
   if (!visible) {
     return null;

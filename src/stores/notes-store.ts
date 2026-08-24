@@ -13,8 +13,12 @@ import {
   saveEncryptedNote,
 } from '../services/tauri-bridge';
 import { useSettingsStore } from './settings-store';
+import { perfReport } from '../services/perf';
 import { useEditorStore } from './editor-store';
 import type { ViewMode } from './editor-store';
+
+// 应用自身最近写入的文件（path → 时间戳），不进 store 避免触发订阅
+const recentWrites = new Map<string, number>();
 
 export interface OpenTab {
   path: string;
@@ -67,6 +71,8 @@ interface NotesState {
   toggleSortDirection: () => void;
   refreshNotes: (rootPath: string) => Promise<void>;
   setNotesFromCache: (loaded: NoteMetadata[]) => void;
+  markRecentWrite: (path: string) => void;
+  consumeRecentWrite: (path: string) => boolean;
   duplicateNote: (rootPath: string) => Promise<void>;
   loadCustomSortOrder: (rootPath: string, folder: string | null) => Promise<void>;
   applyCustomSortOrder: (rootPath: string, folder: string | null, noteIds: string[]) => Promise<void>;
@@ -86,7 +92,23 @@ interface NotesState {
   clearExpandedFolders: () => void;
 }
 
-export const useNotesStore = create<NotesState>((set, get) => ({
+export const useNotesStore = create<NotesState>((set, get) => {
+  // （私有）把 activeContent/isDirty 同步回活动标签缓存。
+  // updateContent 不再每键更新 openTabs（避免整个数组引用每键变化、
+  // 所有订阅 openTabs 的组件每键重渲染），改在切标签/关标签/外部重载前调用
+  const syncActiveTab = () => {
+    const s = get();
+    if (!s.activeTabPath) return;
+    const tab = s.openTabs.find(t => t.path === s.activeTabPath);
+    if (tab && tab.content === s.activeContent && tab.isDirty === s.isDirty) return;
+    set({
+      openTabs: s.openTabs.map(t =>
+        t.path === s.activeTabPath ? { ...t, content: s.activeContent, isDirty: s.isDirty } : t
+      ),
+    });
+  };
+
+  return {
   projects: [],
   notes: [],
   activeNote: null,
@@ -135,7 +157,11 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     set({ isLoading: true });
     try {
       const config = useSettingsStore.getState().config;
+      const t0 = performance.now();
       const notes = await getAllNotes(rootPath, config.extra_folders || []);
+      // 全量目录扫描超过 200ms 记录（启动/全量刷新链路）
+      const dt = performance.now() - t0;
+      if (dt > 200) perfReport('scan-notes', dt, `count=${notes.length}`);
       set({ notes, isLoading: false });
     } catch (e) {
       console.error('Failed to load notes:', e);
@@ -156,12 +182,14 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
   selectNote: async (note) => {
     // Save current tab if dirty
-    const state = get();
-    if (state.isDirty && state.activeNote) {
+    const before = get();
+    if (before.isDirty && before.activeNote) {
       await get().saveCurrentNote();
     }
+    syncActiveTab();
 
     // Check if note is already open in a tab
+    const state = get();
     const existingTab = state.openTabs.find(t => t.path === note.path);
     if (existingTab) {
       // Switch to existing tab
@@ -190,7 +218,11 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     }
 
     try {
+      const t0 = performance.now();
       const result = await readNote(note.path);
+      // 读盘超过 100ms 记录（切换笔记卡顿定位）
+      const readMs = performance.now() - t0;
+      if (readMs > 100) perfReport('read-note', readMs, `len=${result.content.length}`);
       const isEmpty = !result.content.trim();
       const viewMode: ViewMode = isEmpty ? 'split' : 'preview';
 
@@ -221,12 +253,14 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   switchTab: async (path) => {
-    const state = get();
+    const before = get();
     // Save current tab if dirty
-    if (state.isDirty && state.activeNote) {
+    if (before.isDirty && before.activeNote) {
       await get().saveCurrentNote();
     }
+    syncActiveTab();
 
+    const state = get();
     const tab = state.openTabs.find(t => t.path === path);
     if (!tab) return;
 
@@ -250,6 +284,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   closeTab: async (path) => {
+    syncActiveTab();
     const state = get();
     const tab = state.openTabs.find(t => t.path === path);
 
@@ -308,6 +343,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   closeAllTabs: async () => {
+    syncActiveTab();
     const state = get();
     // Save all dirty tabs
     for (const tab of state.openTabs) {
@@ -341,6 +377,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   closeOtherTabs: async (path) => {
+    syncActiveTab();
     const state = get();
     const keepTab = state.openTabs.find(t => t.path === path);
     if (!keepTab) return;
@@ -377,6 +414,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   closeLeftTabs: async (path) => {
+    syncActiveTab();
     const state = get();
     const idx = state.openTabs.findIndex(t => t.path === path);
     if (idx <= 0) return;
@@ -416,6 +454,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   closeRightTabs: async (path) => {
+    syncActiveTab();
     const state = get();
     const idx = state.openTabs.findIndex(t => t.path === path);
     if (idx < 0 || idx >= state.openTabs.length - 1) return;
@@ -454,6 +493,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   },
 
   reloadOpenTabs: async (changedPaths) => {
+    syncActiveTab();
     const state = get();
     const changedSet = new Set(changedPaths.map(p => p.replace(/\\/g, '/')));
     let updatedTabs = [...state.openTabs];
@@ -489,13 +529,8 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
   updateContent: (content, rootPath) => {
     const state = get();
-    // Update both store-level fields and tab-level fields
-    const updatedTabs = state.openTabs.map(t =>
-      t.path === state.activeTabPath
-        ? { ...t, content, isDirty: true }
-        : t
-    );
-    set({ activeContent: content, isDirty: true, openTabs: updatedTabs });
+    // 只更新 store 级字段；openTabs 缓存延迟到切换/关闭时同步，
+    // 避免每次按键都新建 openTabs 数组导致订阅方全部重渲染
 
     // Debounced auto-save (1.5 seconds)
     if (state.saveTimer) {
@@ -504,7 +539,8 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     const timer = setTimeout(async () => {
       await get().saveCurrentNote();
     }, 1500);
-    set({ saveTimer: timer });
+    // 合并为单次 set：避免每次按键两次通知全部订阅者
+    set({ activeContent: content, isDirty: true, saveTimer: timer });
   },
 
   saveCurrentNote: async () => {
@@ -521,12 +557,18 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         contentToSave = activeContent.replace(/\r\n/g, '\n');
       }
 
+      // 先标记自身写入，确保 watcher 回环事件到达时必被吞掉
+      get().markRecentWrite(activeNote.path);
+      const t0 = performance.now();
       if (activeNote.is_encrypted && activeEncryptionPassword) {
         // Save as encrypted
         await saveEncryptedNote(activeNote.path, contentToSave, activeEncryptionPassword);
       } else {
         await writeNote(activeNote.path, contentToSave);
       }
+      // 保存（含加密/写盘）超过 100ms 记录，用于定位保存引发的卡顿
+      const saveMs = performance.now() - t0;
+      if (saveMs > 100) perfReport('save-note', saveMs, `len=${contentToSave.length}`);
 
       // Update dirty state in both store and tab
       const updatedTabs = get().openTabs.map(t =>
@@ -624,6 +666,21 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     }
   },
 
+  // 应用自身写入标记：watcher 会回环触发自己保存的文件事件，
+  // 命中时直接吞掉，避免每次自动保存都引发刷新
+  markRecentWrite: (path) => {
+    recentWrites.set(path.replace(/\\/g, '/'), Date.now());
+  },
+  consumeRecentWrite: (path) => {
+    const key = path.replace(/\\/g, '/');
+    const ts = recentWrites.get(key);
+    if (ts !== undefined) {
+      recentWrites.delete(key);
+      return Date.now() - ts < 5000;
+    }
+    return false;
+  },
+
   duplicateNote: async (rootPath) => {
     const { activeNote, activeFolder } = get();
     if (!activeNote) return;
@@ -689,4 +746,5 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       console.error('Failed to open temporary file:', e);
     }
   },
-}));
+  };
+});

@@ -1,6 +1,5 @@
 import { ViewPlugin, Decoration, DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
 
 class WikilinkWidget extends WidgetType {
   constructor(readonly title: string) { super(); }
@@ -35,20 +34,28 @@ const wikilinkDecoration = ViewPlugin.fromClass(
     }
 
     buildDecorations(view: EditorView) {
+      // 只扫描可见区域而非全文：大文档（数百 KB）下每次按键都对全文
+      // toString + 正则会导致明显输入延迟
       const builder = new RangeSetBuilder<Decoration>();
-      const doc = view.state.doc.toString();
       const regex = /\[\[([^\]]+)\]\]/g;
-      let match;
 
-      while ((match = regex.exec(doc)) !== null) {
-        const from = match.index;
-        const to = from + match[0].length;
-        const title = match[1];
-
-        builder.add(from, to, Decoration.mark({
-          class: 'cm-wikilink-mark',
-          attributes: { 'data-wikilink': title },
-        }));
+      for (const { from, to } of view.visibleRanges) {
+        const startLine = view.state.doc.lineAt(from);
+        const endLine = view.state.doc.lineAt(to);
+        for (let i = startLine.number; i <= endLine.number; i++) {
+          const line = view.state.doc.line(i);
+          regex.lastIndex = 0;
+          let match;
+          while ((match = regex.exec(line.text)) !== null) {
+            const mFrom = line.from + match.index;
+            const mTo = mFrom + match[0].length;
+            const title = match[1];
+            builder.add(mFrom, mTo, Decoration.mark({
+              class: 'cm-wikilink-mark',
+              attributes: { 'data-wikilink': title },
+            }));
+          }
+        }
       }
 
       return builder.finish();

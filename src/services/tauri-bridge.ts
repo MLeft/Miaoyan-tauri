@@ -13,6 +13,10 @@ export async function getNotesInFolder(folderPath: string, rootPath: string): Pr
   return invoke('get_notes_in_folder', { folderPath, rootPath });
 }
 
+export async function getNotesMetadata(paths: string[], rootPath: string, extraFolders: string[] = []): Promise<NoteMetadata[]> {
+  return invoke('get_notes_metadata', { paths, rootPath, extraFolders });
+}
+
 export async function readNote(path: string): Promise<NoteContent> {
   return invoke('read_note', { path });
 }

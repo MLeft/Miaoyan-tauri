@@ -7,6 +7,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { openPath } from '@tauri-apps/plugin-opener';
 import type { Annotation } from '../../types';
 import { AnnotationPanel } from './AnnotationPanel';
+import { perfReport } from '../../services/perf';
 
 function resolveImagePaths(html: string, notePath: string): string {
   // 获取笔记所在目录（处理 Windows 和 Unix 路径）
@@ -28,14 +29,24 @@ function resolveImagePaths(html: string, notePath: string): string {
 
 export function Preview() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const { activeContent, activeNote } = useNotesStore();
-  const { editorScrollLine, viewMode } = useEditorStore();
-  const { config } = useSettingsStore();
+  // 窄订阅：避免 store 其他字段变化触发预览重渲染
+  const activeContent = useNotesStore((s) => s.activeContent);
+  const activeNote = useNotesStore((s) => s.activeNote);
+  // 窄订阅：editorScrollLine 每个滚动帧都会变，全量订阅会让预览
+  // 在滚动时逐帧重渲染（含全部 useCallback 重建）
+  const editorScrollLine = useEditorStore((s) => s.editorScrollLine);
+  const viewMode = useEditorStore((s) => s.viewMode);
+  const config = useSettingsStore((s) => s.config);
   const [renderedHtml, setRenderedHtml] = useState('');
   const [iframeReady, setIframeReady] = useState(false);
   const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 解析序号：快速打字时可能有多个 parseMarkdown 同时在途，只采纳最新一次的结果
+  const renderSeq = useRef(0);
+  const annTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // RAF throttle for editor→preview scroll sync
   const scrollSyncRafRef = useRef<number | null>(null);
+  // 性能埋点：setContent 发出时刻，收到 preview-rendered 时算端到端耗时
+  const renderSentAtRef = useRef<number>(0);
 
   // ── Annotation state ──
   const [annotationMode, setAnnotationMode] = useState(false);
@@ -58,19 +69,27 @@ export function Preview() {
   useEffect(() => {
     if (!activeNote) return;
     if (renderTimer.current) clearTimeout(renderTimer.current);
+    const seq = ++renderSeq.current;
     renderTimer.current = setTimeout(async () => {
       try {
         if (isHtmlFile) {
           // HTML 文件直接渲染源码，不走 Markdown 解析
-          setRenderedHtml(activeContent);
+          if (seq === renderSeq.current) setRenderedHtml(activeContent);
           return;
         }
+        const t0 = performance.now();
         const html = await parseMarkdown(activeContent);
-        setRenderedHtml(html);
+        // Markdown 解析 IPC 超过 100ms 记录（含序列化大文档的开销）
+        const parseMs = performance.now() - t0;
+        if (parseMs > 100) perfReport('parse-md', parseMs, `len=${activeContent.length}`);
+        // 丢弃过期结果，避免旧内容覆盖新内容/多余的重渲染
+        if (seq === renderSeq.current) setRenderedHtml(html);
       } catch (e) {
         console.error('Failed to parse markdown:', e);
       }
-    }, 150);
+    // 自适应防抖：大文档每次渲染要重建数百 KB HTML，缩短间隔只会让预览
+    // 永远在追赶；小文档保持 250ms 的跟手感
+    }, activeContent.length > 100_000 ? 600 : 250);
     return () => { if (renderTimer.current) clearTimeout(renderTimer.current); };
   }, [activeContent, activeNote?.id, isHtmlFile]);
 
@@ -80,6 +99,7 @@ export function Preview() {
     const iframe = iframeRef.current;
     if (!iframe?.contentWindow) return;
     const processedHtml = activeNote ? resolveImagePaths(renderedHtml, activeNote.path) : renderedHtml;
+    renderSentAtRef.current = performance.now();
     iframe.contentWindow.postMessage({
       type: 'setContent',
       html: processedHtml,
@@ -136,6 +156,16 @@ export function Preview() {
         window.dispatchEvent(new CustomEvent('wikilink-navigate', { detail: { title: e.data.title } }));
       }
 
+      // iframe 渲染完成：端到端（解析→postMessage→innerHTML→后处理）超过 500ms 记录
+      if (e.data.type === 'preview-rendered') {
+        if (renderSentAtRef.current > 0) {
+          const total = performance.now() - renderSentAtRef.current;
+          renderSentAtRef.current = 0;
+          if (total > 500) perfReport('preview-render', total);
+        }
+        return;
+      }
+
       if (e.data.type === 'checkbox-toggle') {
         const index = parseInt(e.data.index, 10);
         if (isNaN(index)) return;
@@ -172,7 +202,10 @@ export function Preview() {
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [activeContent]);
+    // 不依赖 activeContent：toggleCheckbox 内部通过 getState 取最新内容，
+    // 避免每次按键都重新挂载全局 message 监听器
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Load annotations when note changes ──
   useEffect(() => {
@@ -196,9 +229,17 @@ export function Preview() {
   // ── Render highlights when annotations or content changes ──
   useEffect(() => {
     if (!iframeReady) return;
-    iframeRef.current?.contentWindow?.postMessage({
-      type: 'renderAnnotations', annotations,
-    }, '*');
+    // 无批注时无需发送：setContent 的 innerHTML 整段替换已自动清除旧高亮，
+    // 避免每次按键都触发 iframe 内全文本节点遍历
+    if (annotations.length === 0) return;
+    // 防抖：打字触发的连续内容更新只在停顿后重算一次高亮
+    if (annTimer.current) clearTimeout(annTimer.current);
+    annTimer.current = setTimeout(() => {
+      annTimer.current = null;
+      iframeRef.current?.contentWindow?.postMessage({
+        type: 'renderAnnotations', annotations,
+      }, '*');
+    }, 250);
   }, [annotations, iframeReady, renderedHtml]);
 
   // ── Persist annotations to disk ──

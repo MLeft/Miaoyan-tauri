@@ -98,10 +98,15 @@ const DiagramHandler = {
     await Promise.all(renderPromises);
   },
 
-  initializePlantUML() {
+  initializePlantUML(retryCount = 0) {
     if (typeof window.plantumlEncoder === 'undefined') {
+      // 限制重试次数，避免 encoder 未加载时无限轮询
+      if (retryCount >= 10) {
+        console.warn('PlantUML encoder not available, skipping diagram rendering');
+        return;
+      }
       console.warn('PlantUML encoder not loaded, retrying...');
-      setTimeout(() => this.initializePlantUML(), 500);
+      setTimeout(() => this.initializePlantUML(retryCount + 1), 500);
       return;
     }
 
@@ -126,7 +131,8 @@ const DiagramHandler = {
     image.className = 'plantuml-image';
     image.loading = 'lazy';
 
-    let plantumlContent = code.innerText;
+    // textContent 不触发强制布局，innerText 会强制同步计算渲染样式
+    let plantumlContent = code.textContent;
     const isDark = this.isDarkMode();
     const skinparams = window.ThemeConfig?.getPlantUMLSkinparams(isDark) || '';
 
@@ -152,7 +158,7 @@ const DiagramHandler = {
     code.style.display = 'none';
 
     if (!code.dataset.originalContent) {
-      code.dataset.originalContent = code.innerText;
+      code.dataset.originalContent = code.textContent;
     }
 
     code.dataset.processed = 'true';
@@ -253,10 +259,16 @@ const DiagramHandler = {
   },
 
   updateContainerStyles() {
-    document.querySelectorAll('pre').forEach(pre => {
-      if (pre.querySelector('.plantuml-image')) pre.classList.add('plantuml-image-container');
-      if (pre.querySelector('.language-mermaid')) pre.classList.add('mermaid-image-container');
-      if (pre.querySelector('.language-markmap')) pre.classList.add('markmap-image-container');
+    // 旧实现对每个 pre 做三次子树查询；改为按类名直接选中再上溯到 pre，
+    // 每类最多一次查询，无图表文档零开销
+    document.querySelectorAll('.plantuml-image').forEach(el => {
+      el.closest('pre')?.classList.add('plantuml-image-container');
+    });
+    document.querySelectorAll('.language-mermaid').forEach(el => {
+      el.closest('pre')?.classList.add('mermaid-image-container');
+    });
+    document.querySelectorAll('.language-markmap').forEach(el => {
+      el.closest('pre')?.classList.add('markmap-image-container');
     });
   },
 

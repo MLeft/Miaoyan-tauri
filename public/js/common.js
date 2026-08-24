@@ -94,12 +94,16 @@ const MiaoYanCommon = {
     });
   },
 
+  // IntersectionObserver 单例：预览每次渲染都会调 optimizeImages，
+  // 若每次 new 一个且不 disconnect，observer 会随按键无限累积（内存/调度泄漏）。
+  // 提升为模块级单例，observe 前先断开旧观察关系
+  _imageObserver: null,
+
   optimizeImages() {
     const allImages = document.querySelectorAll('img');
 
     // Configuration
     const INTERSECTION_MARGIN = '400px'; // Start loading 400px before viewport for smoother experience
-    const PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
     allImages.forEach((img) => {
       img.style.maxWidth = '100%';
@@ -114,34 +118,42 @@ const MiaoYanCommon = {
 
     // Intersection Observer for aggressive lazy loading
     if ('IntersectionObserver' in window) {
-      const imageObserver = new IntersectionObserver((entries, observer) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            const img = entry.target;
-            if (img.dataset.src) {
-              img.src = img.dataset.src;
-              img.classList.remove('lazy-image');
-              delete img.dataset.src;
-              observer.unobserve(img);
+      const lazyImages = document.querySelectorAll('img.lazy-image');
+      if (lazyImages.length === 0) return;
 
-              // Re-initialize Lightense for this image after it loads
-              if (window.Lightense && (img.closest('#write') || img.parentElement?.tagName === 'P' || img.closest('table'))) {
-                img.addEventListener('load', () => {
-                  window.Lightense([img], {
-                    background: MiaoYanCommon.isDarkMode() ? 'rgba(33, 38, 43, .8)' : 'rgba(255, 255, 255, .8)',
-                  });
-                }, { once: true });
+      if (!this._imageObserver) {
+        this._imageObserver = new IntersectionObserver((entries, observer) => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              const img = entry.target;
+              if (img.dataset.src) {
+                img.src = img.dataset.src;
+                img.classList.remove('lazy-image');
+                delete img.dataset.src;
+                observer.unobserve(img);
+
+                // Re-initialize Lightense for this image after it loads
+                if (window.Lightense && (img.closest('#write') || img.parentElement?.tagName === 'P' || img.closest('table'))) {
+                  img.addEventListener('load', () => {
+                    window.Lightense([img], {
+                      background: MiaoYanCommon.isDarkMode() ? 'rgba(33, 38, 43, .8)' : 'rgba(255, 255, 255, .8)',
+                    });
+                  }, { once: true });
+                }
               }
             }
-          }
+          });
+        }, {
+          rootMargin: INTERSECTION_MARGIN,
+          threshold: 0.01
         });
-      }, {
-        rootMargin: INTERSECTION_MARGIN,
-        threshold: 0.01
-      });
+      } else {
+        // 复用单例：先丢弃指向旧 DOM（已被 innerHTML 替换）的观察关系
+        this._imageObserver.disconnect();
+      }
 
-      document.querySelectorAll('img.lazy-image').forEach(img => {
-        imageObserver.observe(img);
+      lazyImages.forEach(img => {
+        this._imageObserver.observe(img);
       });
     } else {
       // Fallback for older browsers (shouldn't happen on macOS 11.5+)
@@ -167,7 +179,8 @@ const MiaoYanCommon = {
     // Generate unique IDs for headings, handling duplicates
     const usedIds = new Set();
     document.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((h) => {
-      let baseId = h.innerText.trim();
+      // textContent 不触发布局计算，比 innerText 便宜得多
+      let baseId = h.textContent.trim();
       let id = baseId;
       let counter = 1;
 
@@ -193,6 +206,10 @@ const MiaoYanCommon = {
   setupFootnoteLinks() {
     var write = document.getElementById('write');
     if (!write) return;
+    // #write 是持久节点，每次渲染重复 addEventListener 会累积重复监听器；
+    // 用标记保证只绑定一次
+    if (write.dataset.footnoteBound === '1') return;
+    write.dataset.footnoteBound = '1';
 
     write.addEventListener('click', function(e) {
       var target = e.target.closest('a');
@@ -215,15 +232,47 @@ const MiaoYanCommon = {
     });
   },
 
+  // 代码块高亮缓存（内容 hash → 高亮后 HTML）：预览每次更新都重建 innerHTML，
+  // hljs.highlightAll 会重复高亮未变更的代码块，大文档/多代码块时开销显著
+  _hlCache: new Map(),
+  _hlHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash) + str.charCodeAt(i);
+      hash |= 0;
+    }
+    return hash;
+  },
+
   initializeCore() {
     if (window.hljs) {
-      hljs.configure({ cssSelector: 'pre code' });
-      hljs.highlightAll();
+      document.querySelectorAll('pre code').forEach((block) => {
+        if (block.dataset.highlighted === 'yes') return;
+        const raw = block.textContent;
+        const key = this._hlHash(raw);
+        const cached = this._hlCache.get(key);
+        if (cached) {
+          block.innerHTML = cached;
+          block.classList.add('hljs');
+          block.dataset.highlighted = 'yes';
+        } else {
+          try {
+            hljs.highlightElement(block);
+            this._hlCache.set(key, block.innerHTML);
+          } catch (e) {
+            /* 高亮失败保留原文 */
+          }
+        }
+      });
+      // 防止缓存无限增长
+      if (this._hlCache.size > 500) this._hlCache.clear();
     }
 
     this.escapeCurrencyLikeMath();
 
-    if (window.EmojiConvertor) {
+    // 短路：文档不含 ':'（emoji shortcode 的必要字符）时跳过全文本节点遍历；
+    // _hasEmojiHint 由 preview.html setContent 在 html 字符串上预判
+    if (window.EmojiConvertor && window._hasEmojiHint !== false) {
       const writeElement = document.getElementById('write');
       const emoji = new EmojiConvertor();
 
@@ -267,6 +316,9 @@ const MiaoYanCommon = {
   },
 
   escapeCurrencyLikeMath() {
+    // 短路：本函数是 KaTeX 的预处理，文档无数学时（_hasMathHint 由
+    // preview.html setContent 在字符串上预判）无需遍历全部文本节点
+    if (window._hasMathHint === false) return;
     const writeElement = document.getElementById('write');
     if (!writeElement) {
       return;

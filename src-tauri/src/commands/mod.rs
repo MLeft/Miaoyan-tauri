@@ -9,29 +9,61 @@ use crate::services::encryption;
 use uuid::Uuid;
 
 #[command]
-pub fn get_projects(root_path: String, extra_folders: Vec<String>) -> Vec<Project> {
-    let mut projects = storage::scan_projects(Path::new(&root_path));
-    for folder in extra_folders {
-        let p = Path::new(&folder);
-        if p.exists() && p.is_dir() {
-            let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let children = storage::scan_projects(p);
-            projects.push(Project { name, path: folder, children, is_root: false });
+pub async fn get_projects(root_path: String, extra_folders: Vec<String>) -> Vec<Project> {
+    // 后台线程池执行 + 多根并行扫描，避免阻塞 UI 主线程
+    tauri::async_runtime::spawn_blocking(move || {
+        let root_handle = {
+            let rp = root_path.clone();
+            std::thread::spawn(move || storage::scan_projects(Path::new(&rp)))
+        };
+        let extra_handles: Vec<_> = extra_folders
+            .into_iter()
+            .map(|f| {
+                std::thread::spawn(move || {
+                    let p = Path::new(&f);
+                    if p.exists() && p.is_dir() {
+                        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        let children = storage::scan_projects(p);
+                        Some(Project { name, path: f, children, is_root: false })
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        let mut projects = root_handle.join().unwrap_or_default();
+        for h in extra_handles {
+            if let Ok(Some(proj)) = h.join() {
+                projects.push(proj);
+            }
         }
-    }
-    projects
+        projects
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[command]
-pub fn get_all_notes(root_path: String, extra_folders: Vec<String>) -> Vec<NoteMetadata> {
-    let mut notes = storage::scan_notes(Path::new(&root_path));
-    for folder in extra_folders {
-        let p = Path::new(&folder);
-        if p.exists() && p.is_dir() {
-            notes.extend(storage::scan_notes(p));
+pub async fn get_all_notes(root_path: String, extra_folders: Vec<String>) -> Vec<NoteMetadata> {
+    // 后台线程池执行 + 多根并行扫描，避免阻塞 UI 主线程
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut roots = vec![root_path];
+        roots.extend(extra_folders);
+        let handles: Vec<_> = roots
+            .into_iter()
+            .map(|r| std::thread::spawn(move || storage::scan_notes(Path::new(&r))))
+            .collect();
+        let mut notes: Vec<NoteMetadata> = Vec::new();
+        for h in handles {
+            if let Ok(mut n) = h.join() {
+                notes.append(&mut n);
+            }
         }
-    }
-    notes
+        notes.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+        notes
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[command]
@@ -39,6 +71,26 @@ pub fn get_notes_in_folder(folder_path: String, root_path: String) -> Vec<NoteMe
     let folder = Path::new(&folder_path);
     let root = Path::new(&root_path);
     storage::scan_notes_in_folder(folder, root)
+}
+
+/// 按路径批量获取笔记元数据（增量刷新用，避免全量重扫目录）
+#[command]
+pub fn get_notes_metadata(paths: Vec<String>, root_path: String, extra_folders: Vec<String>) -> Vec<NoteMetadata> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::with_capacity(extra_folders.len() + 1);
+    if !root_path.is_empty() {
+        roots.push(std::path::PathBuf::from(&root_path));
+    }
+    for f in &extra_folders {
+        roots.push(std::path::PathBuf::from(f));
+    }
+    paths
+        .iter()
+        .filter_map(|p| {
+            let path = Path::new(p);
+            let root = roots.iter().find(|r| path.starts_with(r)).unwrap_or(roots.first()?);
+            storage::build_note_metadata(path, root)
+        })
+        .collect()
 }
 
 #[command]
@@ -237,7 +289,14 @@ pub fn open_in_terminal(path: String) -> Result<(), String> {
 }
 
 #[command]
-pub fn search_notes(root_path: String, query: String) -> Vec<NoteMetadata> {
+pub async fn search_notes(root_path: String, query: String) -> Vec<NoteMetadata> {
+    // 全文搜索代价高，后台线程池执行，避免阻塞 UI 主线程
+    tauri::async_runtime::spawn_blocking(move || search_notes_impl(root_path, query))
+        .await
+        .unwrap_or_default()
+}
+
+fn search_notes_impl(root_path: String, query: String) -> Vec<NoteMetadata> {
     if query.is_empty() {
         return storage::scan_notes(Path::new(&root_path));
     }
@@ -333,87 +392,115 @@ pub fn parse_markdown(content: String) -> String {
         }
     };
 
-    // Collect (tag_name, line_number) in document order for injection
+    // 收集块级 Start 事件的标签与行号（文档序），用于注入 data-sourcepos
     let parser = Parser::new_ext(&content, options);
-    let offset_events: Vec<(Event, std::ops::Range<usize>)> =
-        parser.into_offset_iter().collect();
+    let offset_events: Vec<(Event, std::ops::Range<usize>)> = parser.into_offset_iter().collect();
 
-    let mut block_annotations: Vec<(String, usize)> = Vec::new();
+    let mut annotations: Vec<(&'static str, usize)> = Vec::new();
     for (event, range) in &offset_events {
         if let Event::Start(tag) = event {
             if let Some(html_tag) = block_html_tag(tag) {
-                let line = byte_to_line(range.start);
-                block_annotations.push((html_tag.to_string(), line));
+                annotations.push((html_tag, byte_to_line(range.start)));
             }
         }
     }
 
-    // Render HTML with SoftBreak -> HardBreak
-    let events_final: Vec<Event> = offset_events.into_iter().map(|(e, _)| {
-        if matches!(e, Event::SoftBreak) { Event::HardBreak } else { e }
-    }).collect();
+    // 一次性渲染（保住 HtmlWriter 的表格对齐/表头状态、脚注编号、换行状态），
+    // SoftBreak 转 HardBreak 与原逻辑一致
+    let events_final = offset_events
+        .into_iter()
+        .map(|(e, _)| if matches!(e, Event::SoftBreak) { Event::HardBreak } else { e });
+    let mut html_output = String::with_capacity(content.len() * 2);
+    html::push_html(&mut html_output, events_final);
 
-    let mut html_output = String::new();
-    html::push_html(&mut html_output, events_final.into_iter());
-
-    // Inject data-sourcepos attributes on block tags (in document order)
-    html_output = inject_sourcepos(html_output, &block_annotations);
+    // 线性注入 data-sourcepos（单次扫描 + 一次重建，无全文移动）
+    let html_output = inject_sourcepos(html_output, &annotations);
 
     // Post-process: add footnote back-links and reference IDs
-    html_output = add_footnote_backlinks(html_output);
+    let html_output = add_footnote_backlinks(html_output);
 
     html_output
 }
 
 /// Inject data-sourcepos="N" on opening block tags in document order.
-/// Walks the HTML string once, matching each tag with its precomputed line number.
-fn inject_sourcepos(html: String, annotations: &[(String, usize)]) -> String {
+///
+/// 语义与旧的逐条 find+insert_str 实现一致，但只扫描 HTML 一次：
+/// 预收集全部可注入点（标签名 + 位置），按注释顺序消费后一次性重建，
+/// 避免每次 insert_str 移动后续全文的 O(块数×文档长) 开销。
+fn inject_sourcepos(html: String, annotations: &[(&'static str, usize)]) -> String {
     if annotations.is_empty() {
         return html;
     }
-    let mut result = html;
-    let mut search_pos = 0usize;
-
-    for (tag_name, line) in annotations {
-        let needle = format!("<{}", tag_name);
-        // Search from current position
-        if let Some(rel) = result[search_pos..].find(&needle) {
-            let abs = search_pos + rel;
-            // Verify this is a full tag match: next char after tag_name must be '>', ' ', '\n', '\r', or '/'
-            let after = abs + needle.len();
-            let next_char = result[after..].chars().next();
-            let is_full_match = matches!(next_char, Some('>') | Some(' ') | Some('\n') | Some('\r') | Some('/'));
-            if is_full_match {
-                let insert_at = after;
-                let attr = format!(" data-sourcepos=\"{}\"", line);
-                result.insert_str(insert_at, &attr);
-                search_pos = insert_at + attr.len();
-            } else {
-                // Not a full tag match (e.g., <pre when we want <p), try searching further
-                let mut offset = search_pos + rel + 1;
-                let mut found = false;
-                while let Some(rel2) = result[offset..].find(&needle) {
-                    let abs2 = offset + rel2;
-                    let after2 = abs2 + needle.len();
-                    let nc = result[after2..].chars().next();
-                    if matches!(nc, Some('>') | Some(' ') | Some('\n') | Some('\r') | Some('/')) {
-                        let attr = format!(" data-sourcepos=\"{}\"", line);
-                        result.insert_str(after2, &attr);
-                        search_pos = after2 + attr.len();
-                        found = true;
-                        break;
-                    }
-                    offset = abs2 + 1;
-                }
-                if !found {
-                    break;
+    // 预扫描可注入点：'<' + 白名单标签名 + 紧跟 ' '/'>'/'\n'/'\r'/'/'
+    let bytes = html.as_bytes();
+    let mut points: Vec<(&'static str, usize)> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let rel = match html[i..].find('<') {
+            Some(r) => r,
+            None => break,
+        };
+        let lt = i + rel;
+        let name_start = lt + 1;
+        let name_end = bytes[name_start..]
+            .iter()
+            .position(|b| !b.is_ascii_alphanumeric())
+            .map(|p| name_start + p)
+            .unwrap_or(bytes.len());
+        if name_end > name_start && name_end < bytes.len() {
+            if matches!(bytes[name_end], b'>' | b' ' | b'\n' | b'\r' | b'/') {
+                let tag: &'static str = match &html[name_start..name_end] {
+                    "p" => "p",
+                    "h1" => "h1",
+                    "h2" => "h2",
+                    "h3" => "h3",
+                    "h4" => "h4",
+                    "h5" => "h5",
+                    "h6" => "h6",
+                    "blockquote" => "blockquote",
+                    "pre" => "pre",
+                    "ul" => "ul",
+                    "ol" => "ol",
+                    "li" => "li",
+                    "table" => "table",
+                    _ => "",
+                };
+                if !tag.is_empty() {
+                    points.push((tag, name_end));
                 }
             }
-        } else {
-            break;
         }
+        i = lt + 1;
     }
-    result
+    // 按注释顺序消费注入点；某条注释找不到匹配即 break（与旧实现一致）
+    let mut inserts: Vec<(usize, usize)> = Vec::with_capacity(annotations.len());
+    let mut pi = 0usize;
+    'outer: for (tag, line) in annotations {
+        while pi < points.len() {
+            let (ptag, pos) = points[pi];
+            pi += 1;
+            if ptag == *tag {
+                inserts.push((pos, *line));
+                continue 'outer;
+            }
+        }
+        break;
+    }
+    if inserts.is_empty() {
+        return html;
+    }
+    // 一次性重建，插入点间无全文移动
+    let mut out = String::with_capacity(html.len() + inserts.len() * 24);
+    let mut last = 0usize;
+    for (pos, line) in &inserts {
+        out.push_str(&html[last..*pos]);
+        out.push_str(" data-sourcepos=\"");
+        out.push_str(&line.to_string());
+        out.push('"');
+        last = *pos;
+    }
+    out.push_str(&html[last..]);
+    out
 }
 
 /// Post-process HTML to convert pulldown-cmark footnote format to cmark-gfm compatible format.
@@ -515,10 +602,34 @@ fn add_footnote_backlinks(html: String) -> String {
 #[command]
 pub fn start_watching(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
     use crate::services::watcher;
+    use crate::services::watcher::WatchMsg;
+    use notify::Watcher;
+    use std::sync::mpsc;
+    use std::sync::{Mutex, OnceLock};
+
+    // 同一时刻只保留一个 watcher：配置变化重新监听时先停掉旧的，避免事件翻倍
+    static PREV_TX: OnceLock<Mutex<Option<mpsc::Sender<WatchMsg>>>> = OnceLock::new();
+    let slot = PREV_TX.get_or_init(|| Mutex::new(None));
+    if let Some(prev) = slot.lock().unwrap().take() {
+        let _ = prev.send(WatchMsg::Stop);
+    }
+
+    let (tx, rx) = mpsc::channel::<WatchMsg>();
+    *slot.lock().unwrap() = Some(tx.clone());
+
     std::thread::spawn(move || {
-        let _watcher = watcher::start_watcher(app_handle, &paths);
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+        let mut watcher = match watcher::start_watcher(app_handle, &paths, tx) {
+            Some(w) => w,
+            None => return,
+        };
+        // 阻塞等待控制消息（无事件时线程休眠，零 CPU）
+        while let Ok(msg) = rx.recv() {
+            match msg {
+                WatchMsg::WatchDir(dir) => {
+                    let _ = watcher.watch(&dir, notify::RecursiveMode::NonRecursive);
+                }
+                WatchMsg::Stop => break, // 退出后 watcher 被 drop，自动取消监听
+            }
         }
     });
     Ok(())
@@ -640,7 +751,14 @@ pub fn save_image(note_path: String, image_data: Vec<u8>, extension: String) -> 
 // ===== Backlinks =====
 
 #[command]
-pub fn get_backlinks(root_path: String, note_title: String) -> Result<Vec<BacklinkItem>, String> {
+pub async fn get_backlinks(root_path: String, note_title: String) -> Result<Vec<BacklinkItem>, String> {
+    // 反向链接需读全部笔记内容，后台线程池执行，避免阻塞 UI 主线程
+    tauri::async_runtime::spawn_blocking(move || get_backlinks_impl(root_path, note_title))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn get_backlinks_impl(root_path: String, note_title: String) -> Result<Vec<BacklinkItem>, String> {
     let root = Path::new(&root_path);
     if !root.exists() || !root.is_dir() {
         return Err("Invalid root path".to_string());
@@ -653,15 +771,19 @@ pub fn get_backlinks(root_path: String, note_title: String) -> Result<Vec<Backli
     for entry in walkdir::WalkDir::new(root)
         .into_iter()
         .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            !name.starts_with('.') && name != "Trash"
+            // 根目录始终放行；其余层级跳过隐藏/系统目录（与 scan_notes 一致）
+            if e.depth() == 0 {
+                return true;
+            }
+            !storage::is_ignored_dir(&e.file_name().to_string_lossy())
         })
         .filter_map(|e| e.ok())
     {
-        let path = entry.path();
-        if !path.is_file() {
+        let file_type = entry.file_type();
+        if !file_type.is_file() {
             continue;
         }
+        let path = entry.path();
 
         let ext = path.extension()
             .unwrap_or_default()

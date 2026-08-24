@@ -39,6 +39,7 @@ pub fn run() {
             get_projects,
             get_all_notes,
             get_notes_in_folder,
+            get_notes_metadata,
             read_note,
             write_note,
             create_note,

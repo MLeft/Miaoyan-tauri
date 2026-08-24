@@ -4,6 +4,34 @@ use walkdir::WalkDir;
 use chrono::{DateTime, Utc};
 use crate::models::{NoteMetadata, Project};
 
+/// 系统/重型目录名：扫描与监听时跳过（代码仓库、构建产物、系统目录等）
+pub fn is_ignored_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "Trash"
+                | "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | "__pycache__"
+                | ".git"
+                | "AppData"
+                | "Local Settings"
+                | "NetHood"
+                | "PrintHood"
+                | "Recent"
+                | "SendTo"
+                | "Cookies"
+                | "$Recycle.Bin"
+                | "System Volume Information"
+                | "Library"
+                | "Caches"
+                | "Logs"
+                | "Temporary Items"
+        )
+}
+
 pub fn scan_projects(root_path: &Path) -> Vec<Project> {
     let mut projects = Vec::new();
     if !root_path.exists() || !root_path.is_dir() {
@@ -19,8 +47,8 @@ pub fn scan_projects(root_path: &Path) -> Vec<Project> {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    // Skip hidden directories
-                    if name.starts_with('.') {
+                    // Skip hidden / system directories
+                    if is_ignored_dir(&name) {
                         continue;
                     }
                     let children = scan_projects(&path);
@@ -53,17 +81,17 @@ pub fn scan_notes(root_path: &Path) -> Vec<NoteMetadata> {
             if e.depth() == 0 {
                 return true;
             }
-            // Skip hidden directories and Trash folder
-            let name = e.file_name().to_string_lossy();
-            !name.starts_with('.') && name != "Trash"
+            // Skip hidden / system directories and Trash folder
+            !is_ignored_dir(&e.file_name().to_string_lossy())
         })
         .filter_map(|e| e.ok())
     {
-        let path = entry.path();
-        if !path.is_file() {
+        let file_type = entry.file_type();
+        if !file_type.is_file() {
             continue;
         }
-        
+        let path = entry.path();
+
         let ext = path.extension()
             .unwrap_or_default()
             .to_string_lossy()
@@ -126,7 +154,7 @@ pub fn scan_notes_in_folder(folder_path: &Path, root_path: &Path) -> Vec<NoteMet
     notes
 }
 
-fn build_note_metadata(path: &Path, root_path: &Path) -> Option<NoteMetadata> {
+pub fn build_note_metadata(path: &Path, root_path: &Path) -> Option<NoteMetadata> {
     let metadata = fs::metadata(path).ok()?;
     let encrypted = is_encrypted_file(path);
     // For encrypted files (.md.encrypted), strip both suffixes to get the title

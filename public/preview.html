@@ -47,7 +47,10 @@
   @font-face {
     font-family: 'TsangerJinKai02-W04';
     font-display: fallback;
-    src: url('/fonts/TsangerJinKai02-W04.ttf') format('truetype');
+    /* 子集化 woff2（基于全部笔记实际字符集，覆盖 1956 字符）：
+       原全量 ttf 18MB，每次预览加载都要下载+解析，是打开/切换笔记卡顿的重要原因；
+       子集外字符由字体链中的系统字体兼容回退 */
+    src: url('/fonts/TsangerJinKai02-W04-subset.woff2') format('woff2');
   }
 
   #write { margin: 0; max-width: 100%; padding: 0 28px 80px; box-sizing: border-box; }
@@ -124,23 +127,17 @@
 <link rel="stylesheet" href="/css/diagrams.css">
 
 <script defer src="/js/highlight.min.js"></script>
-<script defer src="/js/mermaid.min.js"></script>
-<script defer src="/js/plantuml-encoder.min.js"></script>
-<script defer src="/js/katex.min.js"></script>
-<script defer src="/js/auto-render.min.js"></script>
 <script defer src="/js/emoji.min.js"></script>
-<script defer src="/js/d3.min.js"></script>
-<script defer src="/js/markmap.min.js"></script>
-<script defer src="/js/markmap-view.min.js"></script>
 <script defer src="/js/lightense.min.js"></script>
 <script defer src="/js/tocbot.min.js"></script>
-
-<!-- MiaoYan Modular Scripts -->
 <script defer src="/js/theme-config.js"></script>
 <script defer src="/js/common.js"></script>
 <script defer src="/js/theme-manager.js"></script>
 <script defer src="/js/diagram-handler.js"></script>
 <script defer src="/js/app.js"></script>
+<!-- mermaid/katex/auto-render/d3/markmap/markmap-view/plantuml-encoder 共约 3.9MB，
+     改为 setContent 时按内容特征动态注入（见 body 内 ensureLib），
+     无图表/数学公式的文档不再解析这些脚本 -->
 </head>
 
 <body>
@@ -162,6 +159,65 @@ var _pendingDark = false;
 var _libsReady = false;
 var _domReady = false;
 var _rawMode = false; /* HTML 文件原始渲染模式：跳过 Markdown 后处理 */
+var _hasMath = false; /* 内容是否含数学符号：无则跳过 KaTeX 全文遍历 */
+var _tocTimer = null; /* tocbot 重建防抖计时器 */
+
+/* ── 按需加载重型库（mermaid/katex/markmap/plantuml 共约 3.9MB）──
+   setContent 时按内容特征判断需要哪些库，动态注入脚本；
+   doRender 等待所需库就绪后再跑后处理链 */
+var _neededLibs = {};
+var _loadingLibs = {};
+
+var LIB_SCRIPTS = {
+  mermaid: ['/js/mermaid.min.js'],
+  plantuml: ['/js/plantuml-encoder.min.js'],
+  math: ['/js/katex.min.js', '/js/auto-render.min.js'],
+  markmap: ['/js/d3.min.js', '/js/markmap.min.js', '/js/markmap-view.min.js']
+};
+
+function libPresent(name) {
+  if (name === 'mermaid') return !!window.mermaid;
+  if (name === 'plantuml') return !!window.plantumlEncoder;
+  if (name === 'math') return !!window.renderMathInElement;
+  if (name === 'markmap') return !!(window.markmap && window.markmap.autoLoader);
+  return true;
+}
+
+/* 按依赖顺序链式注入：前一个脚本 onload 后再注入下一个
+   （markmap 依赖 d3，auto-render 依赖 katex，并行注入无法保证执行顺序） */
+function loadScriptChain(srcs, idx) {
+  if (idx >= srcs.length) return;
+  var s = document.createElement('script');
+  s.src = srcs[idx];
+  s.onload = function() { loadScriptChain(srcs, idx + 1); };
+  document.head.appendChild(s);
+}
+
+function ensureLibs(names) {
+  names.forEach(function(name) {
+    _neededLibs[name] = true;
+    if (libPresent(name) || _loadingLibs[name]) return;
+    _loadingLibs[name] = true;
+    loadScriptChain(LIB_SCRIPTS[name], 0);
+  });
+}
+
+function neededLibsLoaded() {
+  for (var name in _neededLibs) {
+    if (_neededLibs[name] && !libPresent(name)) return false;
+  }
+  return true;
+}
+
+/* 按内容特征判定需要哪些重型库（在 html 字符串上判断，零 DOM 开销） */
+function detectNeededLibs(html) {
+  var names = [];
+  if (html.indexOf('language-mermaid') !== -1) names.push('mermaid');
+  if (html.indexOf('language-plantuml') !== -1) names.push('plantuml');
+  if (html.indexOf('language-markmap') !== -1) names.push('markmap');
+  if (_hasMath) names.push('math');
+  return names;
+}
 
 function applyTheme(isDark) {
   document.documentElement.classList.toggle('darkmode', isDark);
@@ -190,6 +246,12 @@ function doRender() {
     setTimeout(doRender, 100);
     return;
   }
+  /* 所需重型库尚未加载完成时延后：保证 mermaid/KaTeX 等后处理不因
+     动态注入的异步性而漏渲染 */
+  if (!neededLibsLoaded()) {
+    setTimeout(doRender, 50);
+    return;
+  }
 
   MiaoYanCommon.initializeCore();
   MiaoYanCommon.setupInteractiveCheckboxes();
@@ -199,9 +261,11 @@ function doRender() {
   MiaoYanCommon.setupImageZoom();
   DiagramHandler.initializeAll();
 
-  if (window.renderMathInElement) {
+  if (window.renderMathInElement && _hasMath) {
+    var write = document.getElementById('write');
     var renderMath = function() {
-      renderMathInElement(document.body, {
+      /* 只扫描 #write 而非 document.body，避免遍历 TOC 等外围 DOM */
+      renderMathInElement(write, {
         delimiters: [
           { left: "$$", right: "$$", display: true },
           { left: "$", right: "$", display: false },
@@ -224,26 +288,31 @@ function doRender() {
     setTimeout(function() { window.__miaoyanSync.rebuild(); }, 150);
   }
   // Refresh TOC to match new content (tab switch)
+  // 防抖：打字触发的连续 setContent 只在停顿后重建一次 TOC
   if (window.tocbot && document.querySelector('.toc-nav')) {
-    var tocHeadings = document.querySelectorAll('#write h1, #write h2, #write h3');
-    var tocTrigger = document.querySelector('.toc-hover-trigger');
-    try { tocbot.destroy(); } catch(e) {}
-    if (tocHeadings.length >= 2) {
-      if (tocTrigger) tocTrigger.style.display = '';
-      tocbot.init({
-        tocSelector: '.toc-content',
-        contentSelector: '#write',
-        headingSelector: 'h1, h2, h3',
-        hasInnerContainers: true,
-        collapseDepth: 3,
-        scrollSmooth: true,
-        scrollSmoothDuration: 200,
-        headingsOffset: 80,
-        ignoreHiddenElements: true
-      });
-    } else {
-      if (tocTrigger) tocTrigger.style.display = 'none';
-    }
+    if (_tocTimer !== null) clearTimeout(_tocTimer);
+    _tocTimer = setTimeout(function() {
+      _tocTimer = null;
+      var tocHeadings = document.querySelectorAll('#write h1, #write h2, #write h3');
+      var tocTrigger = document.querySelector('.toc-hover-trigger');
+      try { tocbot.destroy(); } catch(e) {}
+      if (tocHeadings.length >= 2) {
+        if (tocTrigger) tocTrigger.style.display = '';
+        tocbot.init({
+          tocSelector: '.toc-content',
+          contentSelector: '#write',
+          headingSelector: 'h1, h2, h3',
+          hasInnerContainers: true,
+          collapseDepth: 3,
+          scrollSmooth: true,
+          scrollSmoothDuration: 200,
+          headingsOffset: 80,
+          ignoreHiddenElements: true
+        });
+      } else {
+        if (tocTrigger) tocTrigger.style.display = 'none';
+      }
+    }, 300);
   }
 }
 
@@ -255,18 +324,27 @@ function setContent(html, isDark, previewWidth) {
   var write = document.getElementById('write');
   if (!write) { _pendingHtml = html; return; }
 
-  /* Reset previous diagram rendering state */
-  write.querySelectorAll('[data-processed]').forEach(function(el) {
-    el.removeAttribute('data-processed');
-  });
-  write.querySelectorAll('[data-mermaid-rendered]').forEach(function(el) {
-    el.removeAttribute('data-mermaid-rendered');
-  });
-  write.querySelectorAll('[data-markmap-rendered]').forEach(function(el) {
-    el.removeAttribute('data-markmap-rendered');
-  });
-  if (window.DiagramHandler) {
-    window.DiagramHandler._svgCache = new Map();
+  /* innerHTML 整段替换会销毁全部旧子节点：data-processed 标记、mermaid SVG、
+     批注高亮都随 DOM 一起消失，无需逐一遍历清理。
+     DiagramHandler._svgCache 按内容 hash 索引，予以保留，
+     未变更的图表下次渲染可直接命中缓存 */
+
+  /* 数学短路：文档不含数学符号时跳过 KaTeX 的全文本节点遍历 */
+  _hasMath = !_rawMode && (
+    html.indexOf('$') !== -1 ||
+    html.indexOf('\\(') !== -1 ||
+    html.indexOf('\\[') !== -1
+  );
+  /* 供 common.js 的 escapeCurrencyLikeMath（KaTeX 预处理）复用同一短路 */
+  window._hasMathHint = _hasMath;
+
+  /* emoji 短路：不含 ':' 时跳过 emoji shortcode 的全文本节点遍历 */
+  window._hasEmojiHint = html.indexOf(':') !== -1;
+
+  /* WikiLinks：在字符串上预转换 [[title]] 为 span，
+     避免先写 DOM 再读回 innerHTML 造成的二次全文序列化 */
+  if (!_rawMode && html.indexOf('[[') !== -1) {
+    html = html.replace(/\[\[([^\]]+)\]\]/g, '<span class="wikilink" data-title="$1">$1</span>');
   }
 
   write.innerHTML = html;
@@ -274,12 +352,10 @@ function setContent(html, isDark, previewWidth) {
   /* 原始 HTML 模式：跳过 WikiLink/图表等 Markdown 专属后处理，保留批注模块可用 */
   if (_rawMode) return;
 
-  /* WikiLinks post-processing (before render, so diagrams aren't affected) */
-  var text = write.innerHTML;
-  text = text.replace(/\[\[([^\]]+)\]\]/g, '<span class="wikilink" data-title="$1">$1</span>');
-  if (text !== write.innerHTML) {
-    write.innerHTML = text;
-  }
+  /* 按内容特征注入所需重型库（无图表/数学公式的文档零加载） */
+  ensureLibs(detectNeededLibs(html));
+
+  /* WikiLinks 点击导航 */
   write.querySelectorAll('.wikilink').forEach(function(el) {
     el.addEventListener('click', function() {
       window.parent.postMessage({ type: 'wikilink-navigate', title: el.dataset.title }, '*');

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useNotesStore } from '../../stores/notes-store';
 import type { OpenTab } from '../../stores/notes-store';
 
@@ -143,7 +144,17 @@ function TabContextMenu({ menu, onClose, onAction }: {
 }
 
 export function TabBar() {
-  const { openTabs, activeTabPath, switchTab, closeTab, closeAllTabs, closeOtherTabs, closeLeftTabs, closeRightTabs } = useNotesStore();
+  // 窄订阅：updateContent 已不再每键更新 openTabs，打字时标签栏不重渲染
+  const { openTabs, activeTabPath, switchTab, closeTab, closeAllTabs, closeOtherTabs, closeLeftTabs, closeRightTabs } = useNotesStore(useShallow((s) => ({
+    openTabs: s.openTabs,
+    activeTabPath: s.activeTabPath,
+    switchTab: s.switchTab,
+    closeTab: s.closeTab,
+    closeAllTabs: s.closeAllTabs,
+    closeOtherTabs: s.closeOtherTabs,
+    closeLeftTabs: s.closeLeftTabs,
+    closeRightTabs: s.closeRightTabs,
+  })));
   const scrollRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ visible: false, x: 0, y: 0, tabPath: '' });
 

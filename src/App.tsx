@@ -143,7 +143,11 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
 }) {
   const { t } = useTranslation();
   const { config } = useSettingsStore();
-  const { viewMode, setViewMode, showToc, toggleToc } = useEditorStore();
+  // 窄订阅：全量订阅会包含 editorScrollLine，导致滚动时工具栏逐帧重渲染
+  const viewMode = useEditorStore((s) => s.viewMode);
+  const setViewMode = useEditorStore((s) => s.setViewMode);
+  const showToc = useEditorStore((s) => s.showToc);
+  const toggleToc = useEditorStore((s) => s.toggleToc);
   const { updateConfig } = useSettingsStore();
 
   const toggleSidebar = () => {
@@ -196,7 +200,10 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
 }
 
 function EditorPane() {
-  const { viewMode, showToc, toggleToc } = useEditorStore();
+  // 窄订阅：同上，避免 editorScrollLine 逐帧触发整个编辑区重渲染
+  const viewMode = useEditorStore((s) => s.viewMode);
+  const showToc = useEditorStore((s) => s.showToc);
+  const toggleToc = useEditorStore((s) => s.toggleToc);
   const activeNote = useNotesStore((s) => s.activeNote);
   const { config } = useSettingsStore();
   const [showBacklinks, setShowBacklinks] = useState(false);

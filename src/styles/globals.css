@@ -1,9 +1,11 @@
 @import "tailwindcss";
 
-/* TsangerJinKai02-W04 - MiaoYan signature font */
+/* TsangerJinKai02-W04 - MiaoYan signature font
+   子集化 woff2（0.43MB，覆盖全部笔记实际字符集）替代原 18MB ttf，
+   避免启动时加载巨型字体文件及 swap 后的整界面重排 */
 @font-face {
   font-family: 'TsangerJinKai02';
-  src: url('/fonts/TsangerJinKai02-W04.ttf') format('truetype');
+  src: url('/fonts/TsangerJinKai02-W04-subset.woff2') format('woff2');
   font-weight: normal;
   font-style: normal;
   font-display: swap;

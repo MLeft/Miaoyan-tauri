@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
