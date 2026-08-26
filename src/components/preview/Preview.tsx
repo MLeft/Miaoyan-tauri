@@ -358,7 +358,9 @@ export function Preview() {
   if (!activeNote) return null;
 
   return (
-    <div className="h-full overflow-hidden relative" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+    <div className="h-full overflow-hidden flex" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+      {/* 左侧预览区：批注侧边栏打开时让出宽度，不再遮挡内容 */}
+      <div className="relative flex-1 min-w-0 h-full">
       {/* Annotation mode toggle button */}
       <button
         onClick={toggleAnnotationMode}
@@ -423,8 +425,9 @@ export function Preview() {
         title="preview"
         onLoad={handleIframeLoad}
       />
+      </div>
 
-      {/* Annotation Panel */}
+      {/* Annotation sidebar（flex 兄弟列，不遮挡预览） */}
       {showPanel && (
         <AnnotationPanel
           annotations={annotations}

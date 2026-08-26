@@ -110,12 +110,11 @@ export function AnnotationPanel({
 
   return (
     <div
-      className="absolute top-0 right-0 h-full flex flex-col z-50"
+      className="h-full flex flex-col shrink-0"
       style={{
         width: '280px',
         backgroundColor: 'var(--bg-secondary)',
         borderLeft: '1px solid var(--border)',
-        boxShadow: '-4px 0 16px rgba(0,0,0,0.08)',
       }}
     >
       {/* Header */}
@@ -288,12 +287,16 @@ export function AnnotationPanel({
                 {ann.comment}
               </div>
             )}
-            {/* Meta + actions */}
-            <div className="flex items-center justify-between mt-1">
-              <span className="text-xs" style={{ color: 'var(--text-muted, #999)', fontSize: '10px' }}>
+            {/* Meta + actions：标题截断、按钮容器禁止收缩，
+                保证任何内容下 编辑/已解决/删除 按钮时刻可见 */}
+            <div className="flex items-center justify-between gap-1 mt-1">
+              <span
+                className="text-xs truncate"
+                style={{ color: 'var(--text-muted, #999)', fontSize: '10px', minWidth: 0, flex: '1 1 auto' }}
+              >
                 {ann.heading ? `§ ${ann.heading}` : ''}
               </span>
-              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                 {ann.status === 'open' ? (
                   <button
                     onClick={() => onResolve(ann.id)}

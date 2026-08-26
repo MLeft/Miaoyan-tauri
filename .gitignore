@@ -34,6 +34,8 @@ vibe_images
 .DS_Store
 # 原始全量字体（18MB）仅本地保留，子集 woff2 已入库
 fonts-src/
+# 桌面自动化验证截图（临时产物）
+miaoyan-window-screenshot.png
 *.suo
 *.ntvs*
 *.njsproj
