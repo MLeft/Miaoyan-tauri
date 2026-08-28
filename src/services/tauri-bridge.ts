@@ -196,3 +196,17 @@ export async function writeAnnotations(notePath: string, json: string): Promise<
 export async function deleteAnnotations(notePath: string): Promise<void> {
   return invoke('delete_annotations', { notePath });
 }
+
+/* ── File association / open-with (Windows) ── */
+
+export async function getPendingOpenFiles(): Promise<string[]> {
+  return invoke<string[]>('get_pending_open_files');
+}
+
+export async function getMdAssociationStatus(): Promise<boolean> {
+  return invoke<boolean>('get_md_association_status');
+}
+
+export async function setMdAssociation(enabled: boolean): Promise<void> {
+  return invoke('set_md_association', { enabled });
+}

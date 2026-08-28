@@ -1,3 +1,6 @@
+pub mod file_association;
+pub use file_association::*;
+
 use std::fs;
 use std::path::Path;
 use std::process::Command as StdCommand;

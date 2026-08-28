@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { stat } from '@tauri-apps/plugin-fs';
+import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
 import { Allotment } from 'allotment';
 import 'allotment/dist/style.css';
@@ -17,7 +18,7 @@ import { Toast } from './components/shared/Toast';
 import { UpdateDialog } from './components/shared/UpdateDialog';
 import { UnifiedTree } from './components/sidebar/UnifiedTree';
 import { formatMarkdown } from './services/formatter';
-import { createNote, createFolder, setAlwaysOnTop, writeNote } from './services/tauri-bridge';
+import { createNote, createFolder, setAlwaysOnTop, writeNote, getPendingOpenFiles } from './services/tauri-bridge';
 import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { log } from './services/logger';
 import { useNotesStore } from './stores/notes-store';
@@ -299,6 +300,20 @@ function WelcomeScreen() {
   );
 }
 
+// 外部 .md 文件打开：不在文库内时自动把父文件夹加入额外文件夹（复用拖拽逻辑）
+async function openExternalFile(path: string) {
+  const folder = path.substring(0, path.lastIndexOf('/'));
+  const current = useSettingsStore.getState().config;
+  if (!folder.startsWith(current.storage_path) && !current.extra_folders.includes(folder)) {
+    await useSettingsStore.getState().updateConfig({
+      extra_folders: [...current.extra_folders, folder],
+    });
+  }
+  await useNotesStore.getState().refreshNotes(current.storage_path);
+  useNotesStore.getState().setActiveFolder(folder, current.storage_path);
+  useNotesStore.getState().openTemporaryFile(path);
+}
+
 export default function App() {
   const { t } = useTranslation();
   const { config, loaded, loadConfig } = useSettingsStore();
@@ -503,17 +518,8 @@ export default function App() {
                 setToastVisible(true);
                 log(`Unsupported binary file: ${path}`);
               } else {
-                const folder = path.substring(0, path.lastIndexOf('/'));
-                const current = useSettingsStore.getState().config;
-                if (!folder.startsWith(current.storage_path) && !current.extra_folders.includes(folder)) {
-                  await useSettingsStore.getState().updateConfig({
-                    extra_folders: [...current.extra_folders, folder]
-                  });
-                }
-                await useNotesStore.getState().refreshNotes(current.storage_path);
-                useNotesStore.getState().setActiveFolder(folder, current.storage_path);
-                useNotesStore.getState().openTemporaryFile(path);
-                log(`Added folder ${folder} and opened file: ${path}`);
+                await openExternalFile(path);
+                log(`Opened dropped file: ${path}`);
               }
             }
           } catch (e) {
@@ -525,6 +531,34 @@ export default function App() {
     }).then(fn => { unlisten = fn; log('DragDrop listener registered'); }).catch(e => { log(`DragDrop listener registration FAILED: ${e}`); });
     return () => { unlisten?.(); };
   }, []);
+
+  // 文件关联打开：冷启动参数 + 单实例转发（双击 .md 文件）
+  useEffect(() => {
+    if (!loaded) return;
+    let unlisten: (() => void) | undefined;
+    const processPending = async () => {
+      try {
+        const paths = await getPendingOpenFiles();
+        for (const path of paths) {
+          try {
+            const info = await stat(path);
+            if (info.isDirectory) continue;
+            await openExternalFile(path);
+            log(`Opened file from association: ${path}`);
+          } catch (e) {
+            log(`Failed to open associated file ${path}: ${e}`);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to get pending open files:', e);
+      }
+    };
+    processPending();
+    listen('miaoyan://open-files', processPending)
+      .then((fn) => { unlisten = fn; })
+      .catch((e) => console.error('Failed to listen open-files event:', e));
+    return () => { unlisten?.(); };
+  }, [loaded]);
 
   // Deep-link handler
   useEffect(() => {

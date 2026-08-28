@@ -70,6 +70,8 @@
     "buttonHide": "Hide",
     "alwaysOnTop": "Always on Top",
     "yes": "Yes",
+    "fileAssociation": "Markdown File Association",
+    "fileAssociationHint": "Adds 'Open with MiaoYan' to the right-click menu. Setting as default app requires one confirmation in Windows Settings.",
     "no": "No",
     "quickLaunch": "Quick Launch",
     "recording": "Recording...",

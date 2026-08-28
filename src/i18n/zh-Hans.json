@@ -70,6 +70,8 @@
     "buttonHide": "隐藏",
     "alwaysOnTop": "置顶显示",
     "yes": "是",
+    "fileAssociation": "关联 Markdown 文件",
+    "fileAssociationHint": "注册后右键菜单出现 Open with MiaoYan；设为默认应用需在 Windows 设置中确认一次",
     "no": "否",
     "quickLaunch": "快捷唤起",
     "recording": "录制中...",

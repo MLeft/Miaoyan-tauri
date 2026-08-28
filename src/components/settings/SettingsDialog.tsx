@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../stores/settings-store';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
-import { setAlwaysOnTop, detectCloudSync, type CloudSyncInfo } from '../../services/tauri-bridge';
+import { setAlwaysOnTop, detectCloudSync, getMdAssociationStatus, setMdAssociation, type CloudSyncInfo } from '../../services/tauri-bridge';
 
 type Tab = 'interface' | 'experience' | 'editor' | 'typography';
 
@@ -23,12 +23,19 @@ export function SettingsDialog({ onClose }: Props) {
   const { config, updateConfig } = useSettingsStore();
   const [activeTab, setActiveTab] = useState<Tab>('interface');
   const [cloudInfo, setCloudInfo] = useState<CloudSyncInfo | null>(null);
+  const isWindows = navigator.userAgent.includes('Windows');
+  const [mdAssociated, setMdAssociated] = useState(false);
 
   useEffect(() => {
     detectCloudSync()
       .then(setCloudInfo)
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!isWindows) return;
+    getMdAssociationStatus().then(setMdAssociated).catch(() => {});
+  }, [isWindows]);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'interface', label: t('settings.general') },
@@ -268,6 +275,32 @@ export function SettingsDialog({ onClose }: Props) {
                     </div>
                   </div>
                 </Row>
+
+                {isWindows && (
+                  <Row label={`${t('settings.fileAssociation')}:`}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <MacSelect
+                        value={mdAssociated ? 'yes' : 'no'}
+                        onChange={async (v) => {
+                          const enabled = v === 'yes';
+                          try {
+                            await setMdAssociation(enabled);
+                            setMdAssociated(enabled);
+                          } catch (e) {
+                            console.error('Failed to set file association:', e);
+                          }
+                        }}
+                        options={[
+                          { value: 'yes', label: t('settings.yes') },
+                          { value: 'no', label: t('settings.no') },
+                        ]}
+                      />
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)', maxWidth: CONTROL_WIDTH, lineHeight: '16px' }}>
+                        {t('settings.fileAssociationHint')}
+                      </span>
+                    </div>
+                  </Row>
+                )}
               </div>
             )}
 

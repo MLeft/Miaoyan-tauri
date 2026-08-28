@@ -68,6 +68,8 @@
     "buttonHide": "隱藏",
     "alwaysOnTop": "置頂顯示",
     "yes": "是",
+    "fileAssociation": "關聯 Markdown 檔案",
+    "fileAssociationHint": "註冊後右鍵選單出現 Open with MiaoYan；設為預設應用需在 Windows 設定中確認一次",
     "no": "否",
     "quickLaunch": "快捷喚起",
     "clear": "清除",

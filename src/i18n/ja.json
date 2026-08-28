@@ -68,6 +68,8 @@
     "buttonHide": "非表示",
     "alwaysOnTop": "最前面表示",
     "yes": "はい",
+    "fileAssociation": "Markdown ファイルの関連付け",
+    "fileAssociationHint": "登録すると右クリックメニューに Open with MiaoYan が表示されます。既定のアプリにするには Windows の設定で一度確認が必要です。",
     "no": "いいえ",
     "quickLaunch": "クイック起動",
     "clear": "クリア",

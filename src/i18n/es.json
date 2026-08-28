@@ -70,6 +70,8 @@
     "buttonHide": "Ocultar",
     "alwaysOnTop": "Siempre encima",
     "yes": "Sí",
+    "fileAssociation": "Asociación de archivos Markdown",
+    "fileAssociationHint": "Añade 'Open with MiaoYan' al menú contextual. Establecer como predeterminada requiere una confirmación en Configuración de Windows.",
     "no": "No",
     "quickLaunch": "Inicio rápido",
     "clear": "Limpiar",
