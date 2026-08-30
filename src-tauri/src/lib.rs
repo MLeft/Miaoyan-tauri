@@ -59,6 +59,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_projects,
             get_all_notes,
+            scan_folder,
             get_notes_in_folder,
             get_notes_metadata,
             read_note,

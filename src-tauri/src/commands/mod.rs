@@ -58,20 +58,7 @@ pub async fn get_projects(app: tauri::AppHandle, root_path: String, extra_folder
             .into_iter()
             .map(|f| {
                 let app = app.clone();
-                std::thread::spawn(move || {
-                    let pb = std::path::PathBuf::from(&f);
-                    if pb.exists() && pb.is_dir() {
-                        let name = pb.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        let _ = app.emit("miaoyan://project-chunk", Project {
-                            name: name.clone(), path: f.clone(), children: Vec::new(), is_root: false,
-                        });
-                        let project = Project { name, path: f, children: storage::scan_projects(&pb), is_root: false };
-                        let _ = app.emit("miaoyan://project-chunk", &project);
-                        Some(project)
-                    } else {
-                        None
-                    }
-                })
+                std::thread::spawn(move || scan_extra_project(&app, f))
             })
             .collect();
         let mut projects: Vec<Project> = Vec::new();
@@ -98,6 +85,77 @@ pub struct NotesChunk {
     pub notes: Vec<NoteMetadata>,
 }
 
+/// 额外文件夹/增量导入目录扫描：先发空壳 project-chunk（行立即渲染），递归扫完再发完整 chunk 替换
+fn scan_extra_project(app: &tauri::AppHandle, f: String) -> Option<Project> {
+    let pb = std::path::PathBuf::from(&f);
+    if pb.exists() && pb.is_dir() {
+        let name = pb.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let _ = app.emit("miaoyan://project-chunk", Project {
+            name: name.clone(), path: f.clone(), children: Vec::new(), is_root: false,
+        });
+        let project = Project { name, path: f, children: storage::scan_projects(&pb), is_root: false };
+        let _ = app.emit("miaoyan://project-chunk", &project);
+        Some(project)
+    } else {
+        None
+    }
+}
+
+/// 单根目录笔记扫描：按顶层子目录拆分并行，扫完一个发一个 notes-chunk；进度计数跨调用共享（每 200 发 scan-progress）
+fn scan_root_notes(
+    app: &tauri::AppHandle,
+    counter: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    r: &str,
+) -> Vec<NoteMetadata> {
+    let root = Path::new(r);
+    if !root.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(root) else { return Vec::new() };
+    let mut collected: Vec<NoteMetadata> = Vec::new();
+    let mut dir_handles: Vec<std::thread::JoinHandle<Vec<NoteMetadata>>> = Vec::new();
+    let mut top_files: Vec<std::path::PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            // 与旧版整树 WalkDir 行为对齐：根下忽略目录（Trash/.git 等）不扫描
+            if storage::is_ignored_dir(&p.file_name().unwrap_or_default().to_string_lossy()) {
+                continue;
+            }
+            let app = app.clone();
+            let counter = std::sync::Arc::clone(counter);
+            let dir = p.to_string_lossy().to_string();
+            dir_handles.push(std::thread::spawn(move || {
+                let notes = storage::scan_notes_with_progress(Path::new(&dir), |_local| {
+                    let total = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if total % 200 == 0 {
+                        let _ = app.emit("miaoyan://scan-progress", total);
+                    }
+                });
+                let _ = app.emit("miaoyan://notes-chunk", NotesChunk { dir, notes: notes.clone() });
+                notes
+            }));
+        } else if storage::is_note_file(&p) {
+            top_files.push(p);
+        }
+    }
+    for h in dir_handles {
+        if let Ok(notes) = h.join() {
+            collected.extend(notes);
+        }
+    }
+    // 根目录顶层文件作为一个 chunk 推送
+    if !top_files.is_empty() {
+        let notes: Vec<NoteMetadata> = top_files
+            .iter()
+            .filter_map(|p| storage::build_note_metadata(p, root))
+            .collect();
+        let _ = app.emit("miaoyan://notes-chunk", NotesChunk { dir: r.to_string(), notes: notes.clone() });
+        collected.extend(notes);
+    }
+    collected
+}
+
 #[command]
 pub async fn get_all_notes(app: tauri::AppHandle, root_path: String, extra_folders: Vec<String>) -> Vec<NoteMetadata> {
     // 后台线程池：每个根目录按顶层子目录拆分并行扫描，一个目录扫完立即发 notes-chunk 事件供前端渐进渲染
@@ -115,54 +173,12 @@ pub async fn get_all_notes(app: tauri::AppHandle, root_path: String, extra_folde
         let handles: Vec<_> = roots
             .into_iter()
             .map(|r| {
-                let counter = std::sync::Arc::clone(&counter);
                 let app = app.clone();
+                let counter = std::sync::Arc::clone(&counter);
                 let collected = std::sync::Arc::clone(&collected);
                 std::thread::spawn(move || {
-                    let root = Path::new(&r);
-                    if !root.is_dir() {
-                        return;
-                    }
-                    let Ok(entries) = fs::read_dir(root) else { return };
-                    let mut dir_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
-                    let mut top_files: Vec<std::path::PathBuf> = Vec::new();
-                    for entry in entries.flatten() {
-                        let p = entry.path();
-                        if p.is_dir() {
-                            // 与旧版整树 WalkDir 行为对齐：根下忽略目录（Trash/.git 等）不扫描
-                            if storage::is_ignored_dir(&p.file_name().unwrap_or_default().to_string_lossy()) {
-                                continue;
-                            }
-                            let app = app.clone();
-                            let counter = std::sync::Arc::clone(&counter);
-                            let collected = std::sync::Arc::clone(&collected);
-                            let dir = p.to_string_lossy().to_string();
-                            dir_handles.push(std::thread::spawn(move || {
-                                let notes = storage::scan_notes_with_progress(Path::new(&dir), |_local| {
-                                    let total = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                                    if total % 200 == 0 {
-                                        let _ = app.emit("miaoyan://scan-progress", total);
-                                    }
-                                });
-                                collected.lock().unwrap().extend(notes.clone());
-                                let _ = app.emit("miaoyan://notes-chunk", NotesChunk { dir, notes });
-                            }));
-                        } else if storage::is_note_file(&p) {
-                            top_files.push(p);
-                        }
-                    }
-                    for h in dir_handles {
-                        let _ = h.join();
-                    }
-                    // 根目录顶层文件作为一个 chunk 推送
-                    if !top_files.is_empty() {
-                        let notes: Vec<NoteMetadata> = top_files
-                            .iter()
-                            .filter_map(|p| storage::build_note_metadata(p, Path::new(&r)))
-                            .collect();
-                        collected.lock().unwrap().extend(notes.clone());
-                        let _ = app.emit("miaoyan://notes-chunk", NotesChunk { dir: r, notes });
-                    }
+                    let notes = scan_root_notes(&app, &counter, &r);
+                    collected.lock().unwrap().extend(notes);
                 })
             })
             .collect();
@@ -174,6 +190,26 @@ pub async fn get_all_notes(app: tauri::AppHandle, root_path: String, extra_folde
             let _ = h.join();
         }
         let mut notes: Vec<NoteMetadata> = collected.lock().unwrap().clone();
+        notes.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+        notes
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// 增量导入单个外部文件夹：只扫新目录（project-chunk/notes-chunk/scan-progress 复用渐进协议，前端监听即合并），
+/// 避免 extra_folders 变更触发全库重扫（历史上导入仅 1 个文件的目录也会重扫 2000+ 文件）
+#[command]
+pub async fn scan_folder(app: tauri::AppHandle, folder: String) -> Vec<NoteMetadata> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let app2 = app.clone();
+        let f2 = folder.clone();
+        let project_handle = std::thread::spawn(move || {
+            scan_extra_project(&app2, f2);
+        });
+        let mut notes = scan_root_notes(&app, &counter, &folder);
+        let _ = project_handle.join();
         notes.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
         notes
     })

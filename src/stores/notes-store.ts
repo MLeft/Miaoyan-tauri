@@ -147,8 +147,30 @@ export const useNotesStore = create<NotesState>((set, get) => {
   loadProjects: async (rootPath) => {
     try {
       const config = useSettingsStore.getState().config;
+      const callFolders = (config.extra_folders || []).map(p => p.replace(/\\/g, '/').toLowerCase());
       const projects = await getProjects(rootPath, config.extra_folders || []);
-      set({ projects });
+      // 迟到保护：扫描期间配置变更时，权威结果须按当前配置裁剪——
+      // 已移除文件夹的行过滤（避免移除行复活），增量导入的文件夹行按前缀保留（避免被晚到结果抹掉）
+      set(s => {
+        const now = useSettingsStore.getState().config.extra_folders || [];
+        const nowNorm = now.map(p => p.replace(/\\/g, '/').toLowerCase());
+        const added = nowNorm.filter(f => !callFolders.includes(f));
+        const removed = callFolders.filter(f => !nowNorm.includes(f));
+        let result = projects;
+        if (removed.length > 0) {
+          result = result.filter(p => {
+            const pp = p.path.replace(/\\/g, '/').toLowerCase();
+            return !removed.some(r => pp === r || pp.startsWith(r + '/'));
+          });
+        }
+        if (added.length === 0) return { projects: result };
+        const inResult = new Set(result.map(p => p.path.replace(/\\/g, '/').toLowerCase()));
+        const late = s.projects.filter(p => {
+          const pp = p.path.replace(/\\/g, '/').toLowerCase();
+          return !inResult.has(pp) && added.some(a => pp === a || pp.startsWith(a + '/'));
+        });
+        return { projects: [...result, ...late] };
+      });
     } catch (e) {
       console.error('Failed to load projects:', e);
     }
@@ -656,6 +678,12 @@ export const useNotesStore = create<NotesState>((set, get) => {
 
   mergeProjectChunk: (project) => {
     // 渐进加载：顶层目录空壳/完整 chunk 立即并入；已存在时原位替换保持行序稳定，新目录追加末尾
+    // 在途扫描的 chunk 可能属于已移除文件夹：不在当前根之下的 chunk 忽略，避免移除行复活
+    const cfg = useSettingsStore.getState().config;
+    const pp = project.path.replace(/\\/g, '/').toLowerCase();
+    const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean)
+      .map(p => p.replace(/\\/g, '/').toLowerCase());
+    if (!roots.some(r => pp === r || pp.startsWith(r + '/'))) return;
     set(s => ({
       projects: s.projects.some(p => p.path === project.path)
         ? s.projects.map(p => (p.path === project.path ? project : p))

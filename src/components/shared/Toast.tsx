@@ -28,11 +28,14 @@ export function Toast({ message, visible, onClose, duration = 2000, busy = false
 
   return (
     <div
-      className="fixed top-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-lg text-sm shadow-lg z-50 dialog-enter"
+      className="fixed top-6 left-1/2 -translate-x-1/2 px-4 py-2.5 text-sm z-50 dialog-enter"
       style={{
-        backgroundColor: 'rgba(72, 187, 120, 0.15)',
-        color: '#2f855a',
-        border: '1px solid rgba(72, 187, 120, 0.4)',
+        backgroundColor: 'var(--toast-bg)',
+        color: 'var(--toast-text)',
+        border: '0.5px solid rgba(255, 255, 255, 0.1)',
+        borderRadius: 8,
+        boxShadow: 'var(--shadow-md)',
+        backdropFilter: 'blur(12px)',
         opacity: show ? 1 : 0,
         transform: `translate(-50%, ${show ? 0 : -10}px)`,
         display: 'flex',
@@ -40,7 +43,7 @@ export function Toast({ message, visible, onClose, duration = 2000, busy = false
         gap: 8,
       }}
     >
-      {busy && (
+      {busy ? (
         <span
           className="animate-spin"
           style={{
@@ -48,8 +51,18 @@ export function Toast({ message, visible, onClose, duration = 2000, busy = false
             height: 12,
             flexShrink: 0,
             borderRadius: '50%',
-            border: '2px solid rgba(47, 133, 90, 0.3)',
-            borderTopColor: '#2f855a',
+            border: '2px solid rgba(255, 255, 255, 0.25)',
+            borderTopColor: 'var(--toast-text)',
+          }}
+        />
+      ) : (
+        <span
+          style={{
+            width: 6,
+            height: 6,
+            flexShrink: 0,
+            borderRadius: '50%',
+            backgroundColor: 'var(--success-color)',
           }}
         />
       )}

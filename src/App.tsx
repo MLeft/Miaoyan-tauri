@@ -18,7 +18,7 @@ import { Toast } from './components/shared/Toast';
 import { UpdateDialog } from './components/shared/UpdateDialog';
 import { UnifiedTree } from './components/sidebar/UnifiedTree';
 import { formatMarkdown } from './services/formatter';
-import { createNote, createFolder, setAlwaysOnTop, writeNote, getPendingOpenFiles } from './services/tauri-bridge';
+import { createNote, createFolder, setAlwaysOnTop, writeNote, getPendingOpenFiles, scanFolder } from './services/tauri-bridge';
 import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { log } from './services/logger';
 import { useNotesStore } from './stores/notes-store';
@@ -323,7 +323,7 @@ function isInsideLibrary(path: string): boolean {
   return roots.some(r => np === r || np.startsWith(r + '/'));
 }
 
-// 把外部文件夹纳入文库：长驻进度 Toast + 实时显示已扫描文件数（Rust 全量扫描每 200 个发一次事件）
+// 把外部文件夹纳入文库：长驻进度 Toast + 实时显示已扫描文件数（Rust 单文件夹扫描每 200 个发一次事件）
 async function importExternalFolder(folder: string): Promise<boolean> {
   const cfg = useSettingsStore.getState().config;
   if (cfg.extra_folders.some(f => normPath(f) === normPath(folder))) return false;
@@ -336,7 +336,8 @@ async function importExternalFolder(folder: string): Promise<boolean> {
   showToastEvent(i18n.t('toast.importingFolder'), true);
   try {
     await useSettingsStore.getState().updateConfig({ extra_folders: [...cfg.extra_folders, folder] });
-    await useNotesStore.getState().refreshNotes(cfg.storage_path);
+    // 增量导入：只扫新文件夹（chunk 事件自动并入树），不重扫全库
+    await scanFolder(folder);
     showToastEvent(i18n.t('toast.importDone'), false);
     return true;
   } finally {

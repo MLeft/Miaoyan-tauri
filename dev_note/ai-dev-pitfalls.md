@@ -89,3 +89,33 @@
 - 将需要持久化的状态提升到 zustand store
 
 **案例**：`<Allotment key={String(config.show_sidebar)}>` 导致侧边栏隐藏/恢复时展开状态丢失。
+
+---
+
+## 7. UI 样式硬编码颜色，不用设计系统 token
+
+**问题**：Toast 用硬编码浅绿（绿底 + 绿字），与应用整体 macOS 风调性脱节，深色模式下尤其突兀。
+
+**根因**：`globals.css` 设计系统早已定义原版墨言的 Toast token（`--toast-bg: rgba(25,25,25,.95)` 深色半透明 + `--toast-text` 白字，明暗主题齐备），但组件写时没查 token、自造颜色。
+
+**解决方案**：
+- 写样式前先查 `globals.css` 的 `:root` / `.dark` token（`--toast-*`、`--success-*`、`--shadow-*`、`--border` 等），禁止硬编码颜色
+- 弹窗/浮层统一规格：`0.5px` 发丝边 + `var(--shadow-*)` + `backdrop-blur`，圆角 6-8px
+- 语义状态点用 `--success-color` 等变量，明暗主题自动取色
+
+**案例**：Toast 改为深色半透明 HUD + 成功绿点/白色 spinner 后与应用调性一致（截图验证明暗两态）。
+
+---
+
+## 8. 移除操作触发全库重扫，两段式更新卡顿
+
+**问题**：点 ✕ 移除额外文件夹后，总数与文件行先消失、父文件夹行数秒后才消失，全程卡顿。
+
+**根因**：移除链路走 `loadProjects + reloadAllNotes` 两次全库扫描；allNotes 与 projects 由两个独立慢扫描更新、返回时机不同 → 两段式更新；全扫本身耗时数秒。
+
+**解决方案**：
+- 移除语义明确、**零全扫**：本地立即过滤（projects 递归剔除节点 + allNotes 按路径前缀过滤），行与计数同帧消失
+- extra_folders 纯新增/纯移除均跳过全扫，仅混合变更才全量刷新
+- **迟到保护必须双向**：权威结果按当前配置裁剪（新增行保留、移除行过滤）；所有合并入口（notes-chunk / project-chunk / fs 增量）按当前根（storage_path + extra_folders）有效性过滤，防在途扫描复活已移除行
+
+**案例**：修复后 CDP 50ms 采样：点 ✕ 后 `t=+1ms` 文件夹行与计数同帧消失，2s 内无复活、无迟到更新。

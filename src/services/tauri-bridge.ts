@@ -1,25 +1,39 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { NoteMetadata, NoteContent, Project, AppConfig } from '../types';
 
-/* ── 全量扫描并发去重：启动时多处调用共享同一次在途扫描，
-   避免双重磁盘扫描互相争抢、chunk 到达时序与完成态不一致（顺序调用不受影响） ── */
-let inflightProjects: Promise<Project[]> | null = null;
-let inflightNotes: Promise<NoteMetadata[]> | null = null;
+/* ── 全量扫描并发去重：同参数并发调用共享同一次在途扫描，
+   避免双重磁盘扫描互相争抢、chunk 到达时序与完成态不一致（顺序调用不受影响）。
+   去重键含参数：extra_folders 变更后的新调用不得复用旧参数在途 Promise（旧结果缺新文件夹，
+   全量替换会抹掉增量导入的行/笔记） ── */
+const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+const scanKey = (rootPath: string, extraFolders: string[]) =>
+  norm(rootPath) + '|' + extraFolders.map(norm).join('|');
+let inflightProjects: { key: string; p: Promise<Project[]> } | null = null;
+let inflightNotes: { key: string; p: Promise<NoteMetadata[]> } | null = null;
 
 export function getProjects(rootPath: string, extraFolders: string[] = []): Promise<Project[]> {
-  if (!inflightProjects) {
-    inflightProjects = invoke<Project[]>('get_projects', { rootPath, extraFolders })
-      .finally(() => { inflightProjects = null; });
+  const key = scanKey(rootPath, extraFolders);
+  if (!inflightProjects || inflightProjects.key !== key) {
+    const p = invoke<Project[]>('get_projects', { rootPath, extraFolders })
+      .finally(() => { if (inflightProjects && inflightProjects.p === p) inflightProjects = null; });
+    inflightProjects = { key, p };
   }
-  return inflightProjects;
+  return inflightProjects.p;
 }
 
 export function getAllNotes(rootPath: string, extraFolders: string[] = []): Promise<NoteMetadata[]> {
-  if (!inflightNotes) {
-    inflightNotes = invoke<NoteMetadata[]>('get_all_notes', { rootPath, extraFolders })
-      .finally(() => { inflightNotes = null; });
+  const key = scanKey(rootPath, extraFolders);
+  if (!inflightNotes || inflightNotes.key !== key) {
+    const p = invoke<NoteMetadata[]>('get_all_notes', { rootPath, extraFolders })
+      .finally(() => { if (inflightNotes && inflightNotes.p === p) inflightNotes = null; });
+    inflightNotes = { key, p };
   }
-  return inflightNotes;
+  return inflightNotes.p;
+}
+
+/* ── 增量导入单个外部文件夹：只扫新目录，chunk 事件由 UnifiedTree 监听自动合并（不触发全库重扫） ── */
+export function scanFolder(folder: string): Promise<NoteMetadata[]> {
+  return invoke<NoteMetadata[]>('scan_folder', { folder });
 }
 
 export async function getNotesInFolder(folderPath: string, rootPath: string): Promise<NoteMetadata[]> {

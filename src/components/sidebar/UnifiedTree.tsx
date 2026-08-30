@@ -221,30 +221,83 @@ export function UnifiedTree() {
     setScanning(true);
     try {
       const cfg = useSettingsStore.getState().config;
+      const callFolders = (cfg.extra_folders || []).map(p => p.replace(/\\/g, '/').toLowerCase());
       const t0 = performance.now();
       const loaded = await getAllNotes(cfg.storage_path, cfg.extra_folders || []);
       // 启动/全量刷新链路：目录扫描超过 200ms 记录
       const dt = performance.now() - t0;
       if (dt > 200) perfReport('scan-notes', dt, `count=${loaded.length}`);
-      setAllNotes(loaded);
-      useNotesStore.getState().setNotesFromCache(loaded);
-      try { localStorage.setItem('miaoyan.scanTotal', String(loaded.length)); } catch { /* 隐私模式等场景忽略 */ }
+      // 迟到保护：扫描期间配置变更时，权威结果须按当前配置裁剪——
+      // 新增文件夹的增量行按前缀保留（避免计数跌落），已移除文件夹的笔记过滤（避免移除行复活）
+      const now = useSettingsStore.getState().config.extra_folders || [];
+      const nowNorm = now.map(p => p.replace(/\\/g, '/').toLowerCase());
+      const added = nowNorm.filter(f => !callFolders.includes(f));
+      const removed = callFolders.filter(f => !nowNorm.includes(f));
+      let merged = loaded;
+      if (removed.length > 0) {
+        merged = merged.filter(n => {
+          const np = n.path.replace(/\\/g, '/').toLowerCase();
+          return !removed.some(r => np === r || np.startsWith(r + '/'));
+        });
+      }
+      if (added.length > 0) {
+        const have = new Set(merged.map(n => n.path.replace(/\\/g, '/').toLowerCase()));
+        const keep = allNotesRef.current.filter(n => {
+          const np = n.path.replace(/\\/g, '/').toLowerCase();
+          return !have.has(np) && added.some(a => np === a || np.startsWith(a + '/'));
+        });
+        if (keep.length > 0) {
+          merged = [...merged, ...keep].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
+        }
+      }
+      setAllNotes(merged);
+      useNotesStore.getState().setNotesFromCache(merged);
+      try { localStorage.setItem('miaoyan.scanTotal', String(merged.length)); } catch { /* 隐私模式等场景忽略 */ }
     } catch (e) { console.error('Failed to load all notes:', e); }
     finally { setScanning(false); }
   }, []);
 
-  // Load all notes on mount, when storage path changes, or when extra folders change
-  useEffect(() => { reloadAllNotes(); }, [config.storage_path, config.extra_folders, reloadAllNotes]);
+  // Load all notes on mount / storage change / mixed folder changes;
+  // 纯新增由导入链路 scan_folder 增量扫描（chunk 事件自动合并）、纯移除由 removeFolderLocal 本地过滤，均跳过避免全库重扫
+  const prevExtraRef = useRef<string[] | null>(null);
+  useEffect(() => {
+    const prev = prevExtraRef.current;
+    const next = config.extra_folders || [];
+    prevExtraRef.current = next;
+    if (prev !== null) {
+      const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+      const added = next.filter(f => !prev.some(p => norm(p) === norm(f)));
+      const removed = prev.filter(f => !next.some(p => norm(p) === norm(f)));
+      if (added.length === 0 || removed.length === 0) return;
+    }
+    reloadAllNotes();
+  }, [config.storage_path, config.extra_folders, reloadAllNotes]);
+
+  // 非扫描态下把当前总数回写持久化（增量导入/文件监听变更后，下次启动的分数分母即时准确）
+  useEffect(() => {
+    if (!scanning && allNotes.length > 0) {
+      try { localStorage.setItem('miaoyan.scanTotal', String(allNotes.length)); } catch { /* 隐私模式等场景忽略 */ }
+    }
+  }, [allNotes, scanning]);
 
   /* ── 渐进加载：Rust 每扫完一个顶层目录发 chunk 事件，前端立即并入，首屏/全量刷新逐目录实时显示 ── */
   useEffect(() => {
     const unNotes = listen<{ dir: string; notes: NoteMetadata[] }>('miaoyan://notes-chunk', (e) => {
+      // 在途扫描的 chunk 可能属于已移除文件夹：只并入当前根（storage_path + extra_folders）之下的笔记
+      const cfg = useSettingsStore.getState().config;
+      const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean)
+        .map(p => p.replace(/\\/g, '/').toLowerCase());
+      const valid = e.payload.notes.filter(n => {
+        const np = n.path.replace(/\\/g, '/').toLowerCase();
+        return roots.some(r => np === r || np.startsWith(r + '/'));
+      });
+      if (valid.length === 0) return;
       // 按本 chunk 路径集合精确去重（顶层文件 chunk 的 dir 为根目录，前缀剔除会误删整棵子树）
-      const incoming = new Set(e.payload.notes.map(n => n.path.replace(/\\/g, '/').toLowerCase()));
+      const incoming = new Set(valid.map(n => n.path.replace(/\\/g, '/').toLowerCase()));
       setAllNotes(prev => {
         const next = [
           ...prev.filter(n => !incoming.has(n.path.replace(/\\/g, '/').toLowerCase())),
-          ...e.payload.notes,
+          ...valid,
         ].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
         allNotesRef.current = next;
         useNotesStore.getState().setNotesFromCache(next);
@@ -266,6 +319,22 @@ export function UnifiedTree() {
     await loadProjects(config.storage_path);
   }, [reloadAllNotes, loadProjects, config.storage_path]);
 
+  /* ── 增量移除额外文件夹：本地立即过滤文件夹行与其笔记，零全扫（行与计数同帧消失） ── */
+  const removeFolderLocal = useCallback((folderPath: string) => {
+    const rm = folderPath.replace(/\\/g, '/').toLowerCase();
+    const inRemoved = (np: string) => np === rm || np.startsWith(rm + '/');
+    const strip = (list: Project[]): Project[] => list
+      .filter(p => !inRemoved(p.path.replace(/\\/g, '/').toLowerCase()))
+      .map(p => ({ ...p, children: strip(p.children) }));
+    useNotesStore.setState(s => ({ projects: strip(s.projects) }));
+    setAllNotes(prev => {
+      const next = prev.filter(n => !inRemoved(n.path.replace(/\\/g, '/').toLowerCase()));
+      allNotesRef.current = next;
+      useNotesStore.getState().setNotesFromCache(next);
+      return next;
+    });
+  }, []);
+
   /* ── Watch filesystem changes ── */
   useEffect(() => {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -284,9 +353,16 @@ export function UnifiedTree() {
         const cfg = useSettingsStore.getState().config;
         const paths = [...files.keys()];
         const probePaths = paths.filter(p => files.get(p) !== 'remove');
-        const upserted = probePaths.length
+        const upsertedRaw = probePaths.length
           ? await getNotesMetadata(probePaths, cfg.storage_path, cfg.extra_folders || [])
           : [];
+        // 外部变更可能来自已移除文件夹：只接受当前根之下的笔记，避免移除行复活
+        const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean)
+          .map(p => p.replace(/\\/g, '/').toLowerCase());
+        const upserted = upsertedRaw.filter(n => {
+          const np = n.path.replace(/\\/g, '/').toLowerCase();
+          return roots.some(r => np === r || np.startsWith(r + '/'));
+        });
         const upsertedSet = new Set(upserted.map(n => n.path.replace(/\\/g, '/')));
         const removedSet = new Set(
           paths.filter(p => files.get(p) === 'remove').map(p => p.replace(/\\/g, '/'))
@@ -696,8 +772,8 @@ export function UnifiedTree() {
               e.stopPropagation();
               const newFolders = config.extra_folders.filter(f => f !== project.path);
               useSettingsStore.getState().updateConfig({ extra_folders: newFolders });
-              loadProjects(config.storage_path);
-              handleRefreshAll();
+              // 增量移除：本地立即过滤，不触发全库重扫
+              removeFolderLocal(project.path);
             }}
             title="Remove from tree (keeps local files)"
           >
