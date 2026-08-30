@@ -150,6 +150,12 @@
     "removed": "Cifrado eliminado",
     "mismatch": "Las contraseñas no coinciden"
   },
+  "toast": {
+    "unsupportedFile": "Tipo de archivo no compatible",
+    "importingFolder": "Importando carpeta externa…",
+    "importingProgress": "Importando carpeta externa… {{count}} archivos escaneados",
+    "importDone": "Carpeta externa importada"
+  },
   "folderMenu": {
     "newFile": "Nuevo archivo",
     "newSubfolder": "Nueva subcarpeta",

@@ -1,12 +1,25 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { NoteMetadata, NoteContent, Project, AppConfig } from '../types';
 
-export async function getProjects(rootPath: string, extraFolders: string[] = []): Promise<Project[]> {
-  return invoke('get_projects', { rootPath, extraFolders });
+/* ── 全量扫描并发去重：启动时多处调用共享同一次在途扫描，
+   避免双重磁盘扫描互相争抢、chunk 到达时序与完成态不一致（顺序调用不受影响） ── */
+let inflightProjects: Promise<Project[]> | null = null;
+let inflightNotes: Promise<NoteMetadata[]> | null = null;
+
+export function getProjects(rootPath: string, extraFolders: string[] = []): Promise<Project[]> {
+  if (!inflightProjects) {
+    inflightProjects = invoke<Project[]>('get_projects', { rootPath, extraFolders })
+      .finally(() => { inflightProjects = null; });
+  }
+  return inflightProjects;
 }
 
-export async function getAllNotes(rootPath: string, extraFolders: string[] = []): Promise<NoteMetadata[]> {
-  return invoke('get_all_notes', { rootPath, extraFolders });
+export function getAllNotes(rootPath: string, extraFolders: string[] = []): Promise<NoteMetadata[]> {
+  if (!inflightNotes) {
+    inflightNotes = invoke<NoteMetadata[]>('get_all_notes', { rootPath, extraFolders })
+      .finally(() => { inflightNotes = null; });
+  }
+  return inflightNotes;
 }
 
 export async function getNotesInFolder(folderPath: string, rootPath: string): Promise<NoteMetadata[]> {

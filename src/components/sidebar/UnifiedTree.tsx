@@ -210,7 +210,15 @@ export function UnifiedTree() {
   const allNotesRef = useRef(allNotes);
   useEffect(() => { allNotesRef.current = allNotes; }, [allNotes]);
 
+  /* ── 渐进加载进度：扫描期间「全部笔记」右侧显示 已加载/总数，完成后只显示总数 ──
+     总数优先用上次会话持久值（启动即可显示分数），Rust scan-total 事件到达后校正 ── */
+  const [scanning, setScanning] = useState(false);
+  const [scanTotal, setScanTotal] = useState(() => {
+    try { return Number(localStorage.getItem('miaoyan.scanTotal')) || 0; } catch { return 0; }
+  });
+
   const reloadAllNotes = useCallback(async () => {
+    setScanning(true);
     try {
       const cfg = useSettingsStore.getState().config;
       const t0 = performance.now();
@@ -220,11 +228,37 @@ export function UnifiedTree() {
       if (dt > 200) perfReport('scan-notes', dt, `count=${loaded.length}`);
       setAllNotes(loaded);
       useNotesStore.getState().setNotesFromCache(loaded);
+      try { localStorage.setItem('miaoyan.scanTotal', String(loaded.length)); } catch { /* 隐私模式等场景忽略 */ }
     } catch (e) { console.error('Failed to load all notes:', e); }
+    finally { setScanning(false); }
   }, []);
 
   // Load all notes on mount, when storage path changes, or when extra folders change
   useEffect(() => { reloadAllNotes(); }, [config.storage_path, config.extra_folders, reloadAllNotes]);
+
+  /* ── 渐进加载：Rust 每扫完一个顶层目录发 chunk 事件，前端立即并入，首屏/全量刷新逐目录实时显示 ── */
+  useEffect(() => {
+    const unNotes = listen<{ dir: string; notes: NoteMetadata[] }>('miaoyan://notes-chunk', (e) => {
+      // 按本 chunk 路径集合精确去重（顶层文件 chunk 的 dir 为根目录，前缀剔除会误删整棵子树）
+      const incoming = new Set(e.payload.notes.map(n => n.path.replace(/\\/g, '/').toLowerCase()));
+      setAllNotes(prev => {
+        const next = [
+          ...prev.filter(n => !incoming.has(n.path.replace(/\\/g, '/').toLowerCase())),
+          ...e.payload.notes,
+        ].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
+        allNotesRef.current = next;
+        useNotesStore.getState().setNotesFromCache(next);
+        return next;
+      });
+    });
+    const unProjects = listen<Project>('miaoyan://project-chunk', (e) => {
+      useNotesStore.getState().mergeProjectChunk(e.payload);
+    });
+    const unTotal = listen<number>('miaoyan://scan-total', (e) => {
+      setScanTotal(e.payload);
+    });
+    return () => { unNotes.then(fn => fn()); unProjects.then(fn => fn()); unTotal.then(fn => fn()); };
+  }, []);
 
   /* ── Refresh local cache + store notes + projects (single disk scan) ── */
   const handleRefreshAll = useCallback(async () => {
@@ -724,7 +758,7 @@ export function UnifiedTree() {
           </span>
           <span className="flex-shrink-0"><IconHome /></span>
           <span className="font-medium">{t('sidebar.allNotes')}</span>
-          <span className="ml-auto text-[10px] opacity-50">{allNotes.length}</span>
+          <span className="ml-auto text-[10px] opacity-50">{scanning ? (scanTotal > 0 ? `${allNotes.length}/${Math.max(scanTotal, allNotes.length)}` : `${allNotes.length}/…`) : allNotes.length}</span>
         </div>
 
         {/* Tree content (virtualized: only visible rows are mounted) */}

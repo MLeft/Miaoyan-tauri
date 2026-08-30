@@ -175,7 +175,10 @@
     "mismatch": "Passwords do not match"
   },
   "toast": {
-    "unsupportedFile": "Unsupported file type"
+    "unsupportedFile": "Unsupported file type",
+    "importingFolder": "Importing external folder…",
+    "importingProgress": "Importing external folder… {{count}} files scanned",
+    "importDone": "External folder imported"
   },
   "folderMenu": {
     "newFile": "New File",

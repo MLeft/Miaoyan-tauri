@@ -175,7 +175,10 @@
     "mismatch": "两次密码不一致"
   },
   "toast": {
-    "unsupportedFile": "不支持的文件格式"
+    "unsupportedFile": "不支持的文件格式",
+    "importingFolder": "正在导入外部文件夹…",
+    "importingProgress": "正在导入外部文件夹，已扫描 {{count}} 个文件…",
+    "importDone": "外部文件夹导入完成"
   },
   "folderMenu": {
     "newFile": "新建文件",

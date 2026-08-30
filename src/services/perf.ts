@@ -1,9 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
-import { useSettingsStore } from '../stores/settings-store';
 
 /*
  * 轻量性能遥测：只记录超过阈值的事件（长任务、慢按键、慢渲染等），
- * 内存缓冲 + 3s 防抖批量落盘到 <storage>/.log/<日期>.log（[perf] 前缀）。
+ * 内存缓冲 + 3s 防抖批量落盘到 ~/.miaoyan/log/<日期>.log（[perf] 前缀）。
  * 正常运行时开销趋近于零，用于定位真实使用中的卡顿点。
  */
 
@@ -15,10 +14,8 @@ function flush() {
   flushTimer = null;
   const lines = buffer.splice(0, buffer.length);
   if (lines.length === 0) return;
-  const storagePath = useSettingsStore.getState().config.storage_path;
-  if (!storagePath) return;
   for (const line of lines) {
-    invoke('write_log', { storagePath, message: `[perf] ${line}` }).catch(() => {});
+    invoke('write_log', { message: `[perf] ${line}` }).catch(() => {});
   }
 }
 

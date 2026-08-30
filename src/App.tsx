@@ -300,18 +300,69 @@ function WelcomeScreen() {
   );
 }
 
-// 外部 .md 文件打开：不在文库内时自动把父文件夹加入额外文件夹（复用拖拽逻辑）
-async function openExternalFile(path: string) {
-  const folder = path.substring(0, path.lastIndexOf('/'));
-  const current = useSettingsStore.getState().config;
-  if (!folder.startsWith(current.storage_path) && !current.extra_folders.includes(folder)) {
-    await useSettingsStore.getState().updateConfig({
-      extra_folders: [...current.extra_folders, folder],
+// 路径归一化比较：统一为 / 并小写（资源管理器传入 / 配置存储 / 拖拽来源的分隔符与盘符大小写可能不一致）
+const normPath = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+
+// WebView2 合成残影缓解：窗口缩放/最小化恢复等事件后旧帧可能残留屏幕（重影），
+// 瞬时改变根节点 opacity 强制全屏合成重绘以清除残影
+function forceRepaint() {
+  const el = document.documentElement;
+  el.style.opacity = '0.99';
+  requestAnimationFrame(() => { el.style.opacity = ''; });
+}
+
+function showToastEvent(message: string, busy = false) {
+  window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, busy } }));
+}
+
+// 判断文件是否已在文库内（主库或任一额外文件夹之下）
+function isInsideLibrary(path: string): boolean {
+  const cfg = useSettingsStore.getState().config;
+  const np = normPath(path);
+  const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean).map(normPath);
+  return roots.some(r => np === r || np.startsWith(r + '/'));
+}
+
+// 把外部文件夹纳入文库：长驻进度 Toast + 实时显示已扫描文件数（Rust 全量扫描每 200 个发一次事件）
+async function importExternalFolder(folder: string): Promise<boolean> {
+  const cfg = useSettingsStore.getState().config;
+  if (cfg.extra_folders.some(f => normPath(f) === normPath(folder))) return false;
+  let unlisten: (() => void) | undefined;
+  try {
+    unlisten = await listen<number>('miaoyan://scan-progress', (e) => {
+      showToastEvent(i18n.t('toast.importingProgress', { count: e.payload }), true);
     });
+  } catch { /* 监听失败仅退化为无计数 */ }
+  showToastEvent(i18n.t('toast.importingFolder'), true);
+  try {
+    await useSettingsStore.getState().updateConfig({ extra_folders: [...cfg.extra_folders, folder] });
+    await useNotesStore.getState().refreshNotes(cfg.storage_path);
+    showToastEvent(i18n.t('toast.importDone'), false);
+    return true;
+  } finally {
+    unlisten?.();
   }
-  await useNotesStore.getState().refreshNotes(current.storage_path);
-  useNotesStore.getState().setActiveFolder(folder, current.storage_path);
-  useNotesStore.getState().openTemporaryFile(path);
+}
+
+// 外部 .md 文件打开：已在树内的文件秒开（不重扫全库）；树外文件先秒开文件，再带进度导入父文件夹（复用拖拽逻辑）
+async function openExternalFile(rawPath: string) {
+  const path = normPath(rawPath); // 拖拽路径为反斜杠形式，先归一化再切分父目录
+  const folder = path.substring(0, path.lastIndexOf('/'));
+  if (isInsideLibrary(path)) {
+    await useNotesStore.getState().openTemporaryFile(path);
+    useEditorStore.getState().setViewMode('preview'); // 外部打开以阅读为主，默认进预览视图
+    const storage = useSettingsStore.getState().config.storage_path;
+    useNotesStore.getState().setActiveFolder(folder, storage);
+    return;
+  }
+  await useNotesStore.getState().openTemporaryFile(path); // 先让用户看到文件，导入在其后执行
+  useEditorStore.getState().setViewMode('preview');
+  if (!folder) return;
+  const imported = await importExternalFolder(folder);
+  if (imported) {
+    const storage = useSettingsStore.getState().config.storage_path;
+    useNotesStore.getState().setActiveFolder(folder, storage);
+  }
 }
 
 export default function App() {
@@ -325,12 +376,18 @@ export default function App() {
   const [showExport, setShowExport] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
+  const [toastBusy, setToastBusy] = useState(false);
 
   // Listen for global show-toast events (from Preview, iframe, etc.)
   useEffect(() => {
     const handler = (e: Event) => {
-      const msg = (e as CustomEvent).detail?.message;
-      if (msg) { setToastMessage(msg); setToastVisible(true); }
+      const detail = (e as CustomEvent).detail;
+      const msg = typeof detail === 'string' ? detail : detail?.message;
+      if (msg) {
+        setToastMessage(msg);
+        setToastBusy(typeof detail === 'object' && !!detail?.busy);
+        setToastVisible(true);
+      }
     };
     window.addEventListener('show-toast', handler);
     return () => window.removeEventListener('show-toast', handler);
@@ -426,6 +483,30 @@ export default function App() {
 
   useEffect(() => { loadConfig(); }, []);
 
+  // 清理 extra_folders 历史遗留的空字符串条目（旧版对反斜杠拖拽路径误写入 ''）
+  useEffect(() => {
+    if (!loaded) return;
+    const folders = useSettingsStore.getState().config.extra_folders || [];
+    if (folders.some(f => !f)) {
+      useSettingsStore.getState().updateConfig({ extra_folders: folders.filter(Boolean) });
+    }
+  }, [loaded]);
+
+  // WebView2 合成残影清理：窗口缩放 / 从后台恢复时强制重绘一次
+  useEffect(() => {
+    // 启动首帧完成后也强制重绘，清除启动期陈旧帧（工具栏缺失/重影）
+    forceRepaint();
+    const t = setTimeout(forceRepaint, 800);
+    const onVisible = () => { if (document.visibilityState === 'visible') forceRepaint(); }
+    window.addEventListener('resize', forceRepaint);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('resize', forceRepaint);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+
   // Auto-check for updates after 3-second delay on startup
   useEffect(() => {
     getVersion().then((v) => setAppVersion(v)).catch(() => {});
@@ -502,12 +583,8 @@ export default function App() {
             const info = await stat(path);
             log(`stat result: isDirectory=${info.isDirectory}`);
             if (info.isDirectory) {
-              const current = useSettingsStore.getState().config;
-              if (!current.extra_folders.includes(path)) {
-                await useSettingsStore.getState().updateConfig({
-                  extra_folders: [...current.extra_folders, path]
-                });
-                await useNotesStore.getState().refreshNotes(current.storage_path);
+              const imported = await importExternalFolder(path);
+              if (imported) {
                 log(`Added extra folder: ${path}`);
               }
             } else {
@@ -537,6 +614,7 @@ export default function App() {
     if (!loaded) return;
     let unlisten: (() => void) | undefined;
     const processPending = async () => {
+      forceRepaint(); // 单实例唤起窗口时旧帧可能未失效，强制重绘
       try {
         const paths = await getPendingOpenFiles();
         for (const path of paths) {
@@ -689,7 +767,7 @@ export default function App() {
       </div>
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {showPresentation && <PresentationMode onClose={() => setShowPresentation(false)} />}
-      <Toast message={toastMessage} visible={toastVisible} onClose={() => setToastVisible(false)} />
+      <Toast message={toastMessage} visible={toastVisible} busy={toastBusy} onClose={() => setToastVisible(false)} />
       <UpdateDialog
         visible={showUpdate}
         update={pendingUpdate}

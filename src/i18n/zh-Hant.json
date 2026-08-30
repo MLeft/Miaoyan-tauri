@@ -169,6 +169,12 @@
     "removed": "加密已移除",
     "mismatch": "兩次密碼不一致"
   },
+  "toast": {
+    "unsupportedFile": "不支援的檔案格式",
+    "importingFolder": "正在匯入外部資料夾…",
+    "importingProgress": "正在匯入外部資料夾，已掃描 {{count}} 個檔案…",
+    "importDone": "外部資料夾匯入完成"
+  },
   "folderMenu": {
     "newFile": "新建檔案",
     "newSubfolder": "新建子資料夾",

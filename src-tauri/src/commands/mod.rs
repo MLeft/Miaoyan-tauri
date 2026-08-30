@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command as StdCommand;
 use tauri::command;
+use tauri::Emitter;
 use crate::models::{NoteMetadata, NoteContent, Project, AppConfig, BacklinkItem};
 use crate::services::storage;
 use crate::services::cloud_sync::{self, CloudSyncInfo};
@@ -12,32 +13,76 @@ use crate::services::encryption;
 use uuid::Uuid;
 
 #[command]
-pub async fn get_projects(root_path: String, extra_folders: Vec<String>) -> Vec<Project> {
-    // 后台线程池执行 + 多根并行扫描，避免阻塞 UI 主线程
+pub async fn get_projects(app: tauri::AppHandle, root_path: String, extra_folders: Vec<String>) -> Vec<Project> {
+    // 后台线程池：顶层目录发现即发空壳 project-chunk（行立即渲染，权威顺序），
+    // 每目录独立线程递归扫描，扫完再发完整 chunk 替换
     tauri::async_runtime::spawn_blocking(move || {
-        let root_handle = {
-            let rp = root_path.clone();
-            std::thread::spawn(move || storage::scan_projects(Path::new(&rp)))
-        };
+        let mut top_dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+        let root = Path::new(&root_path);
+        if root.is_dir() {
+            if let Ok(entries) = fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if !p.is_dir() {
+                        continue;
+                    }
+                    let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    if storage::is_ignored_dir(&name) {
+                        continue;
+                    }
+                    top_dirs.push((name, p));
+                }
+            }
+        }
+        // 先排序再发空壳，与最终返回顺序一致，避免收尾时行序跳变
+        top_dirs.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        let mut root_handles: Vec<std::thread::JoinHandle<Project>> = Vec::new();
+        for (name, p) in top_dirs {
+            let path_str = p.to_string_lossy().to_string();
+            let _ = app.emit("miaoyan://project-chunk", Project {
+                name: name.clone(), path: path_str.clone(), children: Vec::new(), is_root: false,
+            });
+            let app = app.clone();
+            root_handles.push(std::thread::spawn(move || {
+                let project = Project {
+                    name,
+                    path: path_str,
+                    children: storage::scan_projects(&p),
+                    is_root: false,
+                };
+                let _ = app.emit("miaoyan://project-chunk", &project);
+                project
+            }));
+        }
         let extra_handles: Vec<_> = extra_folders
             .into_iter()
             .map(|f| {
+                let app = app.clone();
                 std::thread::spawn(move || {
-                    let p = Path::new(&f);
-                    if p.exists() && p.is_dir() {
-                        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        let children = storage::scan_projects(p);
-                        Some(Project { name, path: f, children, is_root: false })
+                    let pb = std::path::PathBuf::from(&f);
+                    if pb.exists() && pb.is_dir() {
+                        let name = pb.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        let _ = app.emit("miaoyan://project-chunk", Project {
+                            name: name.clone(), path: f.clone(), children: Vec::new(), is_root: false,
+                        });
+                        let project = Project { name, path: f, children: storage::scan_projects(&pb), is_root: false };
+                        let _ = app.emit("miaoyan://project-chunk", &project);
+                        Some(project)
                     } else {
                         None
                     }
                 })
             })
             .collect();
-        let mut projects = root_handle.join().unwrap_or_default();
+        let mut projects: Vec<Project> = Vec::new();
+        for h in root_handles {
+            if let Ok(p) = h.join() {
+                projects.push(p);
+            }
+        }
         for h in extra_handles {
-            if let Ok(Some(proj)) = h.join() {
-                projects.push(proj);
+            if let Ok(Some(p)) = h.join() {
+                projects.push(p);
             }
         }
         projects
@@ -46,22 +91,89 @@ pub async fn get_projects(root_path: String, extra_folders: Vec<String>) -> Vec<
     .unwrap_or_default()
 }
 
+/// 目录扫描 chunk 事件载荷：一个顶层目录扫完即推送，前端渐进加载目录树
+#[derive(serde::Serialize, Clone)]
+pub struct NotesChunk {
+    pub dir: String,
+    pub notes: Vec<NoteMetadata>,
+}
+
 #[command]
-pub async fn get_all_notes(root_path: String, extra_folders: Vec<String>) -> Vec<NoteMetadata> {
-    // 后台线程池执行 + 多根并行扫描，避免阻塞 UI 主线程
+pub async fn get_all_notes(app: tauri::AppHandle, root_path: String, extra_folders: Vec<String>) -> Vec<NoteMetadata> {
+    // 后台线程池：每个根目录按顶层子目录拆分并行扫描，一个目录扫完立即发 notes-chunk 事件供前端渐进渲染
     tauri::async_runtime::spawn_blocking(move || {
+        // 跨根目录累计已扫描文件数，每 200 个向前端发一次进度事件（导入大文件夹时 Toast 实时计数）
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut roots = vec![root_path];
         roots.extend(extra_folders);
+        let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        // 计数线程与扫描线程并行：总数一算出立即上报，前端渐进加载期间显示「已加载/总数」分数
+        let roots_for_count = roots.clone();
+        let count_handle = std::thread::spawn(move || {
+            roots_for_count.iter().map(|r| storage::count_note_files(Path::new(r))).sum::<usize>()
+        });
         let handles: Vec<_> = roots
             .into_iter()
-            .map(|r| std::thread::spawn(move || storage::scan_notes(Path::new(&r))))
+            .map(|r| {
+                let counter = std::sync::Arc::clone(&counter);
+                let app = app.clone();
+                let collected = std::sync::Arc::clone(&collected);
+                std::thread::spawn(move || {
+                    let root = Path::new(&r);
+                    if !root.is_dir() {
+                        return;
+                    }
+                    let Ok(entries) = fs::read_dir(root) else { return };
+                    let mut dir_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+                    let mut top_files: Vec<std::path::PathBuf> = Vec::new();
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_dir() {
+                            // 与旧版整树 WalkDir 行为对齐：根下忽略目录（Trash/.git 等）不扫描
+                            if storage::is_ignored_dir(&p.file_name().unwrap_or_default().to_string_lossy()) {
+                                continue;
+                            }
+                            let app = app.clone();
+                            let counter = std::sync::Arc::clone(&counter);
+                            let collected = std::sync::Arc::clone(&collected);
+                            let dir = p.to_string_lossy().to_string();
+                            dir_handles.push(std::thread::spawn(move || {
+                                let notes = storage::scan_notes_with_progress(Path::new(&dir), |_local| {
+                                    let total = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                                    if total % 200 == 0 {
+                                        let _ = app.emit("miaoyan://scan-progress", total);
+                                    }
+                                });
+                                collected.lock().unwrap().extend(notes.clone());
+                                let _ = app.emit("miaoyan://notes-chunk", NotesChunk { dir, notes });
+                            }));
+                        } else if storage::is_note_file(&p) {
+                            top_files.push(p);
+                        }
+                    }
+                    for h in dir_handles {
+                        let _ = h.join();
+                    }
+                    // 根目录顶层文件作为一个 chunk 推送
+                    if !top_files.is_empty() {
+                        let notes: Vec<NoteMetadata> = top_files
+                            .iter()
+                            .filter_map(|p| storage::build_note_metadata(p, Path::new(&r)))
+                            .collect();
+                        collected.lock().unwrap().extend(notes.clone());
+                        let _ = app.emit("miaoyan://notes-chunk", NotesChunk { dir: r, notes });
+                    }
+                })
+            })
             .collect();
-        let mut notes: Vec<NoteMetadata> = Vec::new();
-        for h in handles {
-            if let Ok(mut n) = h.join() {
-                notes.append(&mut n);
-            }
+        // 总数算出立即上报（不等扫描线程），扫描继续进行
+        if let Ok(total) = count_handle.join() {
+            let _ = app.emit("miaoyan://scan-total", total);
         }
+        for h in handles {
+            let _ = h.join();
+        }
+        let mut notes: Vec<NoteMetadata> = collected.lock().unwrap().clone();
         notes.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
         notes
     })
@@ -1070,8 +1182,12 @@ pub fn move_note(source_path: String, target_folder: String) -> Result<String, S
 }
 
 #[command]
-pub fn write_log(storage_path: String, message: String) -> Result<(), String> {
-    let log_dir = Path::new(&storage_path).join(".log");
+pub fn write_log(message: String) -> Result<(), String> {
+    // 日志统一写到 ~/.miaoyan/log，不落在笔记文库内避免污染用户目录
+    let log_dir = match dirs::home_dir() {
+        Some(home) => home.join(".miaoyan").join("log"),
+        None => storage::get_config_dir().join("log"),
+    };
     fs::create_dir_all(&log_dir)
         .map_err(|e| format!("Failed to create log dir: {}", e))?;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();

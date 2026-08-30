@@ -169,6 +169,12 @@
     "removed": "暗号化が解除されました",
     "mismatch": "パスワードが一致しません"
   },
+  "toast": {
+    "unsupportedFile": "サポートされていないファイル形式",
+    "importingFolder": "外部フォルダをインポート中…",
+    "importingProgress": "外部フォルダをインポート中… {{count}} 件スキャン済み",
+    "importDone": "外部フォルダのインポートが完了しました"
+  },
   "folderMenu": {
     "newFile": "新規ファイル",
     "newSubfolder": "新しいサブフォルダ",

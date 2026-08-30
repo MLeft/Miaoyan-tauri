@@ -69,6 +69,11 @@ pub fn scan_projects(root_path: &Path) -> Vec<Project> {
 }
 
 pub fn scan_notes(root_path: &Path) -> Vec<NoteMetadata> {
+    scan_notes_with_progress(root_path, |_| {})
+}
+
+/// 全量扫描（带进度回调）：每收录一个笔记文件调用一次 on_file，参数为当前累计数量。
+pub fn scan_notes_with_progress(root_path: &Path, mut on_file: impl FnMut(usize)) -> Vec<NoteMetadata> {
     let mut notes = Vec::new();
     if !root_path.exists() {
         return notes;
@@ -110,6 +115,7 @@ pub fn scan_notes(root_path: &Path) -> Vec<NoteMetadata> {
 
         if let Some(meta) = build_note_metadata(path, root_path) {
             notes.push(meta);
+            on_file(notes.len());
         }
     }
 
@@ -199,6 +205,38 @@ pub fn build_note_metadata(path: &Path, root_path: &Path) -> Option<NoteMetadata
         size: metadata.len(),
         is_encrypted: encrypted,
     })
+}
+
+/// 判断是否为可收录的笔记文件（扩展名白名单 + 非隐藏文件，与扫描 walker 的过滤规则一致）
+pub fn is_note_file(path: &Path) -> bool {
+    let ext = path.extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let ext_ok = ext == "md" || ext == "markdown" || ext == "txt" || ext == "html" || ext == "htm" || is_encrypted_file(path);
+    if !ext_ok {
+        return false;
+    }
+    !path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false)
+}
+
+/// 快速统计笔记文件总数（只遍历目录树套用过滤规则，不读文件元数据，供渐进加载先报总数）
+pub fn count_note_files(root_path: &Path) -> usize {
+    if !root_path.exists() {
+        return 0;
+    }
+    WalkDir::new(root_path)
+        .into_iter()
+        .filter_entry(|e| {
+            // 根目录始终放行：额外文件夹本身可能是隐藏目录（如 .multica）
+            if e.depth() == 0 {
+                return true;
+            }
+            !is_ignored_dir(&e.file_name().to_string_lossy())
+        })
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file() && is_note_file(e.path()))
+        .count()
 }
 
 /// Check if path is an encrypted note (.md.encrypted)

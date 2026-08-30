@@ -71,6 +71,7 @@ interface NotesState {
   toggleSortDirection: () => void;
   refreshNotes: (rootPath: string) => Promise<void>;
   setNotesFromCache: (loaded: NoteMetadata[]) => void;
+  mergeProjectChunk: (project: Project) => void;
   markRecentWrite: (path: string) => void;
   consumeRecentWrite: (path: string) => boolean;
   duplicateNote: (rootPath: string) => Promise<void>;
@@ -651,6 +652,15 @@ export const useNotesStore = create<NotesState>((set, get) => {
       await get().loadNotes(rootPath);
     }
     await get().loadProjects(rootPath);
+  },
+
+  mergeProjectChunk: (project) => {
+    // 渐进加载：顶层目录空壳/完整 chunk 立即并入；已存在时原位替换保持行序稳定，新目录追加末尾
+    set(s => ({
+      projects: s.projects.some(p => p.path === project.path)
+        ? s.projects.map(p => (p.path === project.path ? project : p))
+        : [...s.projects, project],
+    }));
   },
 
   setNotesFromCache: (loaded) => {
