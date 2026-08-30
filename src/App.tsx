@@ -14,7 +14,7 @@ import { PresentationMode } from './components/presentation/PresentationMode';
 import { TableOfContents } from './components/shared/TableOfContents';
 import { Backlinks } from './components/shared/Backlinks';
 import { ExportMenu } from './components/shared/ExportMenu';
-import { Toast } from './components/shared/Toast';
+import { Toast, type ToastType } from './components/shared/Toast';
 import { UpdateDialog } from './components/shared/UpdateDialog';
 import { UnifiedTree } from './components/sidebar/UnifiedTree';
 import { formatMarkdown } from './services/formatter';
@@ -311,8 +311,8 @@ function forceRepaint() {
   requestAnimationFrame(() => { el.style.opacity = ''; });
 }
 
-function showToastEvent(message: string, busy = false) {
-  window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, busy } }));
+function showToastEvent(message: string, busy = false, type: ToastType = 'success') {
+  window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, busy, type } }));
 }
 
 // 判断文件是否已在文库内（主库或任一额外文件夹之下）
@@ -378,6 +378,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
   const [toastBusy, setToastBusy] = useState(false);
+  const [toastType, setToastType] = useState<ToastType>('success');
 
   // Listen for global show-toast events (from Preview, iframe, etc.)
   useEffect(() => {
@@ -387,6 +388,7 @@ export default function App() {
       if (msg) {
         setToastMessage(msg);
         setToastBusy(typeof detail === 'object' && !!detail?.busy);
+        setToastType(typeof detail === 'object' && detail?.type === 'warning' ? 'warning' : 'success');
         setToastVisible(true);
       }
     };
@@ -412,6 +414,7 @@ export default function App() {
         ? '自動整形完了~'
         : 'Auto formatting done~';
       setToastMessage(msg);
+      setToastType('success');
       setToastVisible(true);
     } catch (err) {
       console.error('Format failed:', err);
@@ -593,6 +596,7 @@ export default function App() {
               const ext = dotIdx >= 0 ? path.substring(dotIdx).toLowerCase() : '';
               if (ext && BINARY_EXTENSIONS.has(ext)) {
                 setToastMessage(t('toast.unsupportedFile'));
+                setToastType('warning');
                 setToastVisible(true);
                 log(`Unsupported binary file: ${path}`);
               } else {
@@ -764,11 +768,11 @@ export default function App() {
             <EditorPane />
           </Allotment.Pane>
         </Allotment>
-        {showExport && <ExportMenu onClose={() => setShowExport(false)} showToast={(msg) => { setToastMessage(msg); setToastVisible(true); }} />}
+        {showExport && <ExportMenu onClose={() => setShowExport(false)} showToast={(msg) => { setToastMessage(msg); setToastType('success'); setToastVisible(true); }} />}
       </div>
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {showPresentation && <PresentationMode onClose={() => setShowPresentation(false)} />}
-      <Toast message={toastMessage} visible={toastVisible} busy={toastBusy} onClose={() => setToastVisible(false)} />
+      <Toast message={toastMessage} visible={toastVisible} busy={toastBusy} type={toastType} onClose={() => setToastVisible(false)} />
       <UpdateDialog
         visible={showUpdate}
         update={pendingUpdate}

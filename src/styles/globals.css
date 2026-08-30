@@ -65,10 +65,12 @@
   --danger-bg: rgba(255, 59, 48, 0.1);
   --danger-border: rgba(255, 59, 48, 0.25);
   --warning-color: #FF9500;
+  --warning-bg: rgba(255, 149, 0, 0.12);
 
   /* Toast - matching original toastBackgroundColor rgba(0.1, 0.1, 0.1, 0.95) */
   --toast-bg: rgba(25, 25, 25, 0.95);
   --toast-text: #FFFFFF;
+  --toast-surface: rgba(255, 255, 255, 0.78);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -144,10 +146,12 @@
   --danger-bg: rgba(255, 69, 58, 0.12);
   --danger-border: rgba(255, 69, 58, 0.3);
   --warning-color: #FFD60A;
+  --warning-bg: rgba(255, 214, 10, 0.12);
 
   /* Toast */
   --toast-bg: rgba(25, 25, 25, 0.95);
   --toast-text: #FFFFFF;
+  --toast-surface: rgba(42, 48, 56, 0.82);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);

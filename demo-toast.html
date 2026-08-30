@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MiaoYan Toast 样式方案对比 Demo</title>
+<style>
+  /* ========== 设计 Token（复制自 src/styles/globals.css） ========== */
+  :root {
+    --accent: #1C5D33;
+    --accent-light: rgba(28, 93, 51, 0.12);
+    --bg-primary: #FFFFFF;
+    --bg-secondary: #F6F6F4;
+    --text-primary: #262626;
+    --text-secondary: #8A8F98;
+    --border: #E0E0E0;
+    --border-light: #EBEBEB;
+    --success-color: #34C759;
+    --success-bg: rgba(52, 199, 89, 0.12);
+    --success-border: rgba(52, 199, 89, 0.3);
+    --warning-color: #FF9500;
+    --warning-bg: rgba(255, 149, 0, 0.12);
+    --danger-color: #FF3B30;
+    --toast-bg: rgba(25, 25, 25, 0.95);
+    --toast-text: #FFFFFF;
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.25);
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --stage-surface: #FAFAF8;
+  }
+  html.dark {
+    color-scheme: dark;
+    --accent: #54C59F;
+    --accent-light: rgba(84, 197, 159, 0.15);
+    --bg-primary: #23272B;
+    --bg-secondary: #1D2124;
+    --text-primary: #E8EAED;
+    --text-secondary: #9AA0A6;
+    --border: #343A43;
+    --border-light: #3A4147;
+    --success-color: #30D158;
+    --success-bg: rgba(48, 209, 88, 0.15);
+    --success-border: rgba(48, 209, 88, 0.35);
+    --warning-color: #FFD60A;
+    --warning-bg: rgba(255, 214, 10, 0.12);
+    --danger-color: #FF453A;
+    --toast-bg: rgba(25, 25, 25, 0.95);
+    --toast-text: #FFFFFF;
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.5);
+    --stage-surface: #282D32;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    padding: 28px 32px 48px;
+    transition: background .25s, color .25s;
+  }
+
+  /* ========== 页头 ========== */
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  header h1 { font-size: 19px; font-weight: 600; }
+  header .sub { font-size: 12.5px; color: var(--text-secondary); margin-top: 5px; line-height: 1.6; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .ctl-btn {
+    font-family: inherit; font-size: 12.5px; padding: 6px 14px; border-radius: 8px;
+    border: 0.5px solid var(--border); background: var(--bg-primary); color: var(--text-primary);
+    cursor: pointer; transition: all .15s;
+  }
+  .ctl-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .ctl-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  html.dark .ctl-btn.primary { color: #10241C; }
+  .tip { font-size: 12px; color: var(--text-secondary); margin: 14px 0 20px; }
+
+  /* ========== 方案卡片网格 ========== */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--bg-primary); border: 0.5px solid var(--border-light);
+    border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-md);
+    transition: background .25s;
+  }
+  .card-head { padding: 14px 16px 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .card-head .name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .card-head .tag {
+    font-size: 10.5px; font-weight: 500; padding: 2px 7px; border-radius: 999px;
+    background: var(--accent-light); color: var(--accent);
+  }
+  .card-head .desc { font-size: 12px; color: var(--text-secondary); margin-top: 5px; line-height: 1.55; }
+  .card-actions { display: flex; gap: 6px; flex-shrink: 0; padding-top: 2px; }
+  .act-btn {
+    font-family: inherit; font-size: 11.5px; padding: 4px 10px; border-radius: 6px;
+    border: 0.5px solid var(--border); background: transparent; color: var(--text-primary);
+    cursor: pointer; transition: all .15s; white-space: nowrap;
+  }
+  .act-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ========== 模拟编辑器舞台 ========== */
+  .stage {
+    position: relative; height: 240px; overflow: hidden;
+    background: var(--stage-surface); border-top: 0.5px solid var(--border-light);
+    transition: background .25s;
+  }
+  .stage::before { /* 模拟侧边栏 */
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 108px;
+    background: var(--bg-primary); border-right: 0.5px solid var(--border-light);
+    opacity: .7; transition: background .25s;
+  }
+  .fake-lines { position: absolute; left: 140px; right: 36px; top: 52px; }
+  .fake-lines i {
+    display: block; height: 8px; border-radius: 4px; margin-bottom: 13px;
+    background: var(--text-primary); opacity: .08;
+  }
+  .fake-lines i:nth-child(1) { width: 46%; height: 13px; opacity: .14; margin-bottom: 20px; }
+  .fake-lines i:nth-child(2) { width: 88%; }
+  .fake-lines i:nth-child(3) { width: 81%; }
+  .fake-lines i:nth-child(4) { width: 64%; }
+  .fake-lines i:nth-child(5) { width: 90%; }
+  .fake-lines i:nth-child(6) { width: 35%; }
+
+  /* ========== 通用 toast 基础 ========== */
+  .t {
+    position: absolute; display: flex; align-items: center;
+    pointer-events: none; opacity: 0; z-index: 10;
+    font-size: 13px; line-height: 1.3; white-space: nowrap;
+  }
+  .t svg { display: block; flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    width: 13px; height: 13px; border-radius: 50%; flex-shrink: 0;
+    border: 2px solid rgba(255,255,255,.25); border-top-color: var(--toast-text);
+    animation: spin .7s linear infinite;
+  }
+
+  /* ========== 方案 A：顶部胶囊 HUD（现样式精修） ========== */
+  .tA {
+    top: 18px; left: 50%; transform: translate(-50%, -14px);
+    background: var(--toast-bg); color: var(--toast-text);
+    border: 0.5px solid rgba(255, 255, 255, 0.14); border-radius: 999px;
+    padding: 8px 18px 8px 10px; gap: 8px;
+    box-shadow: var(--shadow-lg), inset 0 0.5px 0 rgba(255,255,255,.08);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    transition: opacity .24s ease, transform .3s cubic-bezier(.34,1.56,.64,1);
+  }
+  .tA.show { opacity: 1; transform: translate(-50%, 0); }
+  .tA .icon-chip {
+    width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--success-color);
+  }
+  .tA .icon-chip.warn { background: var(--warning-color); }
+  .tA .spinner { width: 14px; height: 14px; margin: 0 3px; }
+
+  /* ========== 方案 B：毛玻璃通知卡片（主题自适应） ========== */
+  .tB {
+    top: 18px; left: 50%; transform: translate(-50%, -10px) scale(.97);
+    background: rgba(255, 255, 255, 0.78); color: var(--text-primary);
+    border: 0.5px solid var(--border); border-radius: 12px;
+    padding: 10px 16px 10px 10px; gap: 10px;
+    box-shadow: var(--shadow-lg);
+    backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    transition: opacity .22s ease, transform .28s cubic-bezier(.34,1.4,.64,1);
+  }
+  html.dark .tB { background: rgba(44, 50, 56, 0.82); }
+  .tB.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  .tB .icon-sq {
+    width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--success-bg);
+  }
+  .tB .icon-sq.warn { background: var(--warning-bg); }
+  .tB .icon-sq.busy { background: var(--accent-light); }
+  .tB .spinner { border-color: rgba(128,128,128,.25); border-top-color: var(--accent); }
+  .tB .msg { display: flex; flex-direction: column; gap: 1px; }
+  .tB .msg .sub { font-size: 11.5px; color: var(--text-secondary); }
+
+  /* ========== 方案 C：底部极简 Pill（写作无扰） ========== */
+  .tC {
+    bottom: 26px; left: 50%; transform: translate(-50%, 10px) scale(.96);
+    background: var(--toast-bg); color: var(--toast-text);
+    border-radius: 999px; padding: 7px 16px; gap: 7px;
+    font-size: 12.5px;
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    transition: opacity .2s ease, transform .26s cubic-bezier(.34,1.56,.64,1);
+  }
+  .tC.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  .tC .spinner { width: 11px; height: 11px; border-width: 1.5px; }
+
+  /* ========== 方案 D：右下角卡片 + 进度条（桌面通知式） ========== */
+  .tD {
+    bottom: 16px; right: 16px; transform: translateX(18px);
+    background: var(--bg-primary); color: var(--text-primary);
+    border: 0.5px solid var(--border); border-radius: 10px;
+    padding: 11px 14px 12px; gap: 10px; min-width: 232px;
+    box-shadow: var(--shadow-lg);
+    transition: opacity .24s ease, transform .3s cubic-bezier(.21,1.02,.73,1);
+    flex-direction: column; align-items: stretch; white-space: normal;
+  }
+  .tD.show { opacity: 1; transform: translateX(0); }
+  .tD .row { display: flex; align-items: center; gap: 10px; }
+  .tD .icon-dot {
+    width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--success-bg);
+  }
+  .tD .icon-dot.warn { background: var(--warning-bg); }
+  .tD .icon-dot.busy { background: var(--accent-light); }
+  .tD .spinner { border-color: rgba(128,128,128,.25); border-top-color: var(--accent); }
+  .tD .txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .tD .txt .main { font-size: 12.5px; font-weight: 500; }
+  .tD .txt .sub { font-size: 11px; color: var(--text-secondary); }
+  .tD .bar { height: 2.5px; border-radius: 2px; background: var(--border-light); overflow: hidden; margin-top: 2px; }
+  .tD .bar i { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--accent); }
+  .tD.show .bar.run i { animation: fill 3.4s linear forwards; }
+  @keyframes fill { from { width: 0; } to { width: 100%; } }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>MiaoYan Toast 样式方案对比</h1>
+      <div class="sub">4 套方案 · 均使用项目设计系统 Token（--toast-* / --success-* / --warning-color / --shadow-*）· 覆盖成功 / 忙碌 / 警告三态</div>
+    </div>
+    <div class="controls">
+      <button class="ctl-btn" id="themeBtn" onclick="toggleTheme()">切换深色主题</button>
+      <button class="ctl-btn primary" onclick="playAll()">依次预览全部</button>
+    </div>
+  </header>
+  <p class="tip">点击各方案按钮触发实时动效预览。「忙碌态」会先展示转圈进度，2.5 秒后自动转为成功态（模拟导入流程）。建议深浅两种主题各看一遍。</p>
+
+  <div class="grid">
+
+    <!-- ========== 方案 A ========== -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="name">方案 A · 顶部胶囊 HUD <span class="tag">现样式精修</span></div>
+          <div class="desc">保持深色 HUD 与顶部居中，改为全胶囊造型 + 圆形图标徽标 + 弹性入场动效，比现在的方盒更精致。改动最小。</div>
+        </div>
+        <div class="card-actions">
+          <button class="act-btn" onclick="fire('A','ok')">成功</button>
+          <button class="act-btn" onclick="fire('A','busy')">忙碌</button>
+          <button class="act-btn" onclick="fire('A','warn')">警告</button>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="fake-lines"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="t tA" id="tA"></div>
+      </div>
+    </div>
+
+    <!-- ========== 方案 B ========== -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="name">方案 B · 毛玻璃通知卡片 <span class="tag">主题自适应</span></div>
+          <div class="desc">macOS 通知中心质感：浅色主题呈白磨砂、深色主题呈深磨砂，圆角方图标带语义底色，支持副标题（如扫描计数）。</div>
+        </div>
+        <div class="card-actions">
+          <button class="act-btn" onclick="fire('B','ok')">成功</button>
+          <button class="act-btn" onclick="fire('B','busy')">忙碌</button>
+          <button class="act-btn" onclick="fire('B','warn')">警告</button>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="fake-lines"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="t tB" id="tB"></div>
+      </div>
+    </div>
+
+    <!-- ========== 方案 C ========== -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="name">方案 C · 底部极简 Pill <span class="tag">写作无扰</span></div>
+          <div class="desc">移至底部居中，小字号深色胶囊，自下而上轻弹。离视线焦点（正文区）更远，写作时存在感最低。</div>
+        </div>
+        <div class="card-actions">
+          <button class="act-btn" onclick="fire('C','ok')">成功</button>
+          <button class="act-btn" onclick="fire('C','busy')">忙碌</button>
+          <button class="act-btn" onclick="fire('C','warn')">警告</button>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="fake-lines"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="t tC" id="tC"></div>
+      </div>
+    </div>
+
+    <!-- ========== 方案 D ========== -->
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="name">方案 D · 右下角通知卡片 <span class="tag">桌面通知式</span></div>
+          <div class="desc">桌面应用常见位置，主副双行文案 + 自动消失进度条，信息量最大；适合导入这类长任务，日常保存提示略显厚重。</div>
+        </div>
+        <div class="card-actions">
+          <button class="act-btn" onclick="fire('D','ok')">成功</button>
+          <button class="act-btn" onclick="fire('D','busy')">忙碌</button>
+          <button class="act-btn" onclick="fire('D','warn')">警告</button>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="fake-lines"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="t tD" id="tD"></div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+  const CHECK = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+  const CHECK_G = (c) => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+  const WARN_S = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round"><path d="M12 6v7"/><path d="M12 17.5h.01"/></svg>';
+  const WARN_G = (c) => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v8"/><path d="M12 17.5h.01"/></svg>';
+
+  const MSG = {
+    ok:   { A: '外部文件夹导入完成', B: '外部文件夹导入完成', C: '笔记已保存', D: '外部文件夹导入完成' },
+    busy: { A: '正在导入，已扫描 128 个文件…', B: '正在导入外部文件夹…', C: '正在导入，已扫描 128 个文件…', D: '正在导入外部文件夹…' },
+    warn: { A: '不支持的文件格式', B: '不支持的文件格式', C: '不支持的文件格式', D: '不支持的文件格式' },
+  };
+  const BUSY_SUB = '已扫描 128 个文件';
+  const DONE = '导入完成';
+
+  const timers = {};
+
+  function el(id) { return document.getElementById('t' + id); }
+
+  function contentA(kind) {
+    if (kind === 'busy') return '<span class="spinner"></span><span>' + MSG.busy.A + '</span>';
+    if (kind === 'warn') return '<span class="icon-chip warn">' + WARN_S + '</span><span>' + MSG.warn.A + '</span>';
+    return '<span class="icon-chip">' + CHECK + '</span><span>' + MSG.ok.A + '</span>';
+  }
+  function contentB(kind, msgOverride, sub) {
+    if (kind === 'busy') return '<span class="icon-sq busy"><span class="spinner"></span></span><span class="msg"><span>' + (msgOverride || MSG.busy.B) + '</span>' + (sub ? '<span class="sub">' + sub + '</span>' : '') + '</span>';
+    if (kind === 'warn') return '<span class="icon-sq warn">' + WARN_G('var(--warning-color)') + '</span><span class="msg"><span>' + MSG.warn.B + '</span></span>';
+    return '<span class="icon-sq">' + CHECK_G('var(--success-color)') + '</span><span class="msg"><span>' + (msgOverride || MSG.ok.B) + '</span></span>';
+  }
+  function contentC(kind) {
+    if (kind === 'busy') return '<span class="spinner"></span><span>' + MSG.busy.C + '</span>';
+    if (kind === 'warn') return WARN_G('var(--warning-color)') + '<span>' + MSG.warn.C + '</span>';
+    return CHECK_G('var(--success-color)') + '<span>' + MSG.ok.C + '</span>';
+  }
+  function contentD(kind, msgOverride, sub, runBar) {
+    const icon = kind === 'busy'
+      ? '<span class="icon-dot busy"><span class="spinner"></span></span>'
+      : kind === 'warn'
+        ? '<span class="icon-dot warn">' + WARN_G('var(--warning-color)') + '</span>'
+        : '<span class="icon-dot">' + CHECK_G('var(--success-color)') + '</span>';
+    return '<span class="row">' + icon + '<span class="txt"><span class="main">' + (msgOverride || MSG[kind][kind === 'warn' ? 'warn' : kind] || MSG.ok.D) + '</span>' + (sub ? '<span class="sub">' + sub + '</span>' : '') + '</span></span><span class="bar' + (runBar ? ' run' : '') + '"><i></i></span>';
+  }
+
+  function hide(id) {
+    const e = el(id);
+    e.classList.remove('show');
+    if (timers[id]) { clearTimeout(timers[id]); delete timers[id]; }
+  }
+
+  function fire(id, kind, opts) {
+    opts = opts || {};
+    const e = el(id);
+    hide(id);
+    // 强制重排，确保重复点击能重放动画
+    void e.offsetWidth;
+
+    if (id === 'A') e.innerHTML = contentA(kind);
+    if (id === 'B') e.innerHTML = contentB(kind, opts.msg, opts.sub);
+    if (id === 'C') e.innerHTML = contentC(kind);
+    if (id === 'D') e.innerHTML = contentD(kind, opts.msg, opts.sub, opts.bar);
+
+    e.classList.add('show');
+
+    if (kind === 'busy' && !opts.noAutoDone) {
+      // 模拟真实流程：忙碌 2.5s 后自动转为成功态
+      timers[id] = setTimeout(() => {
+        if (id === 'A') e.innerHTML = contentA('ok');
+        if (id === 'B') e.innerHTML = contentB('ok', DONE);
+        if (id === 'C') e.innerHTML = contentC('ok');
+        if (id === 'D') e.innerHTML = contentD('ok', DONE, null, true);
+        timers[id] = setTimeout(() => hide(id), id === 'D' ? 3400 : 2400);
+      }, 2500);
+      return;
+    }
+    timers[id] = setTimeout(() => hide(id), opts.dur || (id === 'D' ? 3400 : kind === 'warn' ? 2800 : 2400));
+  }
+
+  function playAll() {
+    fire('A', 'ok');
+    setTimeout(() => fire('B', 'busy'), 400);
+    setTimeout(() => fire('C', 'ok'), 800);
+    setTimeout(() => fire('D', 'busy'), 1200);
+  }
+
+  function toggleTheme() {
+    const dark = document.documentElement.classList.toggle('dark');
+    document.getElementById('themeBtn').textContent = dark ? '切换浅色主题' : '切换深色主题';
+  }
+
+  // 首屏自动演示一轮
+  setTimeout(playAll, 600);
+</script>
+</body>
+</html>
