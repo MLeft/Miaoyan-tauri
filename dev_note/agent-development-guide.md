@@ -120,6 +120,7 @@ Start-Process "$env:LOCALAPPDATA\MiaoYan\miaoyan.exe"
 | commits/trees/blobs 接口 | sha 在顶层 |
 | 每个 sha | 显式校验长度 40，否则后续调用 422 |
 | 更新 ref | `force` 必须是 **JSON body 布尔值**（`--input` 文件），`-f "force=true"` 报 422 |
+| 更新 ref（fast-forward） | 新 commit 以远端当前 HEAD 为 parent 时 `force: false` 即可；`force: true` 可能被权限策略拦截 |
 | Node 执行子命令 | `execFileSync('gh', argv数组)`，禁止 `execSync` 拼字符串（壳注入告警） |
 | 删除文件 | tree entry `{ path, mode:'100644', type:'blob', sha: null }` |
 | diff 基准 | 用**远端实际 sha**（非本地 HEAD），本地/远端 commit sha 不同步属正常 |
