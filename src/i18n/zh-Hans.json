@@ -99,6 +99,7 @@
     "openInFinder": "在文件管理器中显示",
     "duplicate": "复制",
     "copyName": "复制文件名",
+    "copyPath": "复制文件路径",
     "bold": "粗体",
     "italic": "斜体",
     "strikethrough": "删除线",
@@ -187,6 +188,10 @@
     "revealInFinder": "在 Finder 中显示",
     "openInTerminal": "在终端中打开",
     "delete": "删除文件夹",
-    "copyName": "复制文件夹名称"
+    "copyName": "复制文件夹名称",
+    "copyPath": "复制文件夹路径"
+  },
+  "tabMenu": {
+    "copyPath": "复制路径"
   }
 }

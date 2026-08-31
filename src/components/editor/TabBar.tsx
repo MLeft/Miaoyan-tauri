@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useNotesStore } from '../../stores/notes-store';
 import type { OpenTab } from '../../stores/notes-store';
@@ -84,6 +85,7 @@ function TabContextMenu({ menu, onClose, onAction }: {
   onAction: (action: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (!menu.visible) return;
@@ -103,7 +105,9 @@ function TabContextMenu({ menu, onClose, onAction }: {
     { key: 'closeOthers', label: '关闭其他文件' },
     { key: 'closeLeft', label: '关闭左侧文件' },
     { key: 'closeRight', label: '关闭右侧文件' },
-    { key: 'divider', label: '' },
+    { key: 'divider-1', label: '' },
+    { key: 'copyPath', label: t('tabMenu.copyPath') },
+    { key: 'divider-2', label: '' },
     { key: 'closeAll', label: '关闭全部文件' },
   ];
 
@@ -120,8 +124,8 @@ function TabContextMenu({ menu, onClose, onAction }: {
       }}
     >
       {items.map((item) =>
-        item.key === 'divider' ? (
-          <div key="divider" className="my-1" style={{ borderTop: '1px solid var(--border)' }} />
+        item.key.startsWith('divider') ? (
+          <div key={item.key} className="my-1" style={{ borderTop: '1px solid var(--border)' }} />
         ) : (
           <div
             key={item.key}
@@ -183,6 +187,9 @@ export function TabBar() {
       case 'closeLeft': closeLeftTabs(path); break;
       case 'closeRight': closeRightTabs(path); break;
       case 'closeAll': closeAllTabs(); break;
+      case 'copyPath':
+        navigator.clipboard.writeText(path).catch((e) => console.error('Failed to copy path:', e));
+        break;
     }
     closeContextMenu();
   }, [contextMenu.tabPath, closeTab, closeOtherTabs, closeLeftTabs, closeRightTabs, closeAllTabs, closeContextMenu]);

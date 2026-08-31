@@ -82,6 +82,7 @@
     "pin": "Fijar",
     "unpin": "Desfijar",
     "rename": "Renombrar",
+    "copyPath": "Copiar ruta del archivo",
     "delete": "Eliminar",
     "openInFinder": "Mostrar en el gestor de archivos",
     "duplicate": "Duplicar"
@@ -162,6 +163,10 @@
     "rename": "Renombrar carpeta",
     "revealInFinder": "Mostrar en Finder",
     "openInTerminal": "Abrir en Terminal",
-    "delete": "Eliminar carpeta"
+    "delete": "Eliminar carpeta",
+    "copyPath": "Copiar ruta de la carpeta"
+  },
+  "tabMenu": {
+    "copyPath": "Copiar ruta"
   }
 }

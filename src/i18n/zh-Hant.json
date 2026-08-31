@@ -91,6 +91,7 @@
     "pin": "置頂",
     "unpin": "取消置頂",
     "rename": "重新命名",
+    "copyPath": "複製檔案路徑",
     "delete": "刪除",
     "openInFinder": "在檔案管理員中顯示",
     "duplicate": "複製",
@@ -181,6 +182,10 @@
     "rename": "重新命名資料夾",
     "revealInFinder": "在 Finder 中顯示",
     "openInTerminal": "在終端機中打開",
-    "delete": "刪除資料夾"
+    "delete": "刪除資料夾",
+    "copyPath": "複製資料夾路徑"
+  },
+  "tabMenu": {
+    "copyPath": "複製路徑"
   }
 }

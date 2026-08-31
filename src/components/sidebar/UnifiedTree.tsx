@@ -884,6 +884,12 @@ export function UnifiedTree() {
                 onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
                 {t('contextMenu.copyName')}
               </button>
+              <button onClick={() => handleCopyName(contextMenu.note.path)} className="w-full text-left text-xs rounded-md"
+                style={{ color: 'var(--text-primary)', padding: '5px 12px' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                {t('contextMenu.copyPath')}
+              </button>
               <div style={{ borderTop: '1px solid var(--border)', margin: '3px 0' }} />
               {contextMenu.note.is_encrypted ? (
                 <button onClick={handleRemoveEncryption} className="w-full text-left text-xs rounded-md"
@@ -942,6 +948,14 @@ export function UnifiedTree() {
                 onClick={() => handleCopyName(contextMenu.project.name)}>
                 <span style={{ opacity: 0.6 }}><IconCopy /></span>
                 <span>{t('folderMenu.copyName')}</span>
+              </div>
+              <div className="flex items-center gap-2 cursor-pointer text-xs"
+                style={{ padding: '5px 12px', color: 'var(--text-primary)' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                onClick={() => handleCopyName(contextMenu.project.path)}>
+                <span style={{ opacity: 0.6 }}><IconCopy /></span>
+                <span>{t('folderMenu.copyPath')}</span>
               </div>
               <div className="flex items-center gap-2 cursor-pointer text-xs"
                 style={{ padding: '5px 12px', color: 'var(--text-primary)' }}

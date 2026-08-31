@@ -99,6 +99,7 @@
     "openInFinder": "Show in File Manager",
     "duplicate": "Duplicate",
     "copyName": "Copy File Name",
+    "copyPath": "Copy File Path",
     "bold": "Bold",
     "italic": "Italic",
     "strikethrough": "Strikethrough",
@@ -187,6 +188,10 @@
     "revealInFinder": "Reveal in Finder",
     "openInTerminal": "Open in Terminal",
     "delete": "Delete Folder",
-    "copyName": "Copy Folder Name"
+    "copyName": "Copy Folder Name",
+    "copyPath": "Copy Folder Path"
+  },
+  "tabMenu": {
+    "copyPath": "Copy Path"
   }
 }

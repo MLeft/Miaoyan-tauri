@@ -91,6 +91,7 @@
     "pin": "ピン留め",
     "unpin": "ピン解除",
     "rename": "名前変更",
+    "copyPath": "ファイルパスをコピー",
     "delete": "削除",
     "openInFinder": "ファイルマネージャで表示",
     "duplicate": "複製",
@@ -181,6 +182,10 @@
     "rename": "フォルダの名前変更",
     "revealInFinder": "Finder で表示",
     "openInTerminal": "ターミナルで開く",
-    "delete": "フォルダを削除"
+    "delete": "フォルダを削除",
+    "copyPath": "フォルダパスをコピー"
+  },
+  "tabMenu": {
+    "copyPath": "パスをコピー"
   }
 }
