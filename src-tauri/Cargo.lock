@@ -2347,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "miaoyan"
-version = "1.0.34"
+version = "1.0.35"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
