@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { listen } from '@tauri-apps/api/event';
@@ -197,6 +197,17 @@ export function UnifiedTree() {
   const { config } = useSettingsStore();
 
   const [contextMenu, setContextMenu] = useState<TreeContextMenu>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  useLayoutEffect(() => {
+    if (!contextMenu) return;
+    const el = menuRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x = Math.max(8, Math.min(contextMenu.x, window.innerWidth - rect.width - 8));
+    const y = Math.max(8, Math.min(contextMenu.y, window.innerHeight - rect.height - 8));
+    setMenuPos({ x, y });
+  }, [contextMenu]);
   const [renamingNoteId, setRenamingNoteId] = useState<string | null>(null);
   const [renameNoteValue, setRenameNoteValue] = useState('');
   const [renamingFolderPath, setRenamingFolderPath] = useState<string | null>(null);
@@ -865,8 +876,9 @@ export function UnifiedTree() {
       {/* Context Menu */}
       {contextMenu && (
         <div
+          ref={menuRef}
           className="fixed z-[9999] rounded-lg px-1 py-1 min-w-[160px]"
-          style={{ left: contextMenu.x, top: contextMenu.y, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}
+          style={{ left: menuPos.x, top: menuPos.y, backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           {contextMenu.type === 'note' ? (

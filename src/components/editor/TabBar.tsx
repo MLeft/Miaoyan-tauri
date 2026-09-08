@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useNotesStore } from '../../stores/notes-store';
@@ -86,6 +86,17 @@ function TabContextMenu({ menu, onClose, onAction }: {
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+
+  useLayoutEffect(() => {
+    if (!menu.visible) return;
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x = Math.max(8, Math.min(menu.x, window.innerWidth - rect.width - 8));
+    const y = Math.max(8, Math.min(menu.y, window.innerHeight - rect.height - 8));
+    setPos({ x, y });
+  }, [menu]);
 
   useEffect(() => {
     if (!menu.visible) return;
@@ -116,8 +127,8 @@ function TabContextMenu({ menu, onClose, onAction }: {
       ref={ref}
       className="fixed z-[9999] py-1 rounded-lg px-1 min-w-[160px]"
       style={{
-        left: menu.x,
-        top: menu.y,
+        left: pos.x,
+        top: pos.y,
         backgroundColor: 'var(--bg-secondary)',
         border: '1px solid var(--border)',
         boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
