@@ -953,14 +953,6 @@ export function UnifiedTree() {
                 style={{ padding: '5px 12px', color: 'var(--text-primary)' }}
                 onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
                 onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                onClick={() => handleCopyName(contextMenu.project.path)}>
-                <span style={{ opacity: 0.6 }}><IconCopy /></span>
-                <span>{t('folderMenu.copyPath')}</span>
-              </div>
-              <div className="flex items-center gap-2 cursor-pointer text-xs"
-                style={{ padding: '5px 12px', color: 'var(--text-primary)' }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 onClick={handleRevealInFinder}>
                 <span style={{ opacity: 0.6 }}><IconFinder /></span>
                 <span>{t('folderMenu.revealInFinder')}</span>
@@ -972,6 +964,14 @@ export function UnifiedTree() {
                 onClick={handleOpenInTerminal}>
                 <span style={{ opacity: 0.6 }}><IconTerminal /></span>
                 <span>{t('folderMenu.openInTerminal')}</span>
+              </div>
+              <div className="flex items-center gap-2 cursor-pointer text-xs"
+                style={{ padding: '5px 12px', color: 'var(--text-primary)' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                onClick={() => handleCopyName(contextMenu.project.path)}>
+                <span style={{ opacity: 0.6 }}><IconCopy /></span>
+                <span>{t('folderMenu.copyPath')}</span>
               </div>
               <div style={{ borderTop: '1px solid var(--border)', margin: '3px 0' }} />
               <div className="flex items-center gap-2 cursor-pointer text-xs"
