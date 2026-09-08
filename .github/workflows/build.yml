@@ -141,4 +141,7 @@ jobs:
       - name: Publish release (draft -> published)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" -X PATCH -F draft=false
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n1)
+          test -n "$id" || { echo "release for $GITHUB_REF_NAME not found"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/releases/$id" -X PATCH -F draft=false
