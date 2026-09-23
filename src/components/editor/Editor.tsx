@@ -290,11 +290,20 @@ export function Editor() {
     setTitle(activeNote?.title ?? '');
   }, [activeNote?.title]);
 
+  // Focus the CodeMirror editor when sidebar rename completes
+  useEffect(() => {
+    const handler = () => viewRef.current?.focus();
+    window.addEventListener('editor-focus', handler);
+    return () => window.removeEventListener('editor-focus', handler);
+  }, []);
+
   const handleTitleCommit = useCallback(async () => {
     const trimmed = title.trim();
-    if (!trimmed || !activeNote || trimmed === activeNote.title) return;
+    if (!trimmed || !activeNote || trimmed === activeNote.title || trimmed === activeNote.title.replace(/\.(md|markdown|txt)$/i, '')) return;
     try {
-      await renameNote(activeNote.path, trimmed);
+      const newPath = await renameNote(activeNote.path, trimmed);
+      const newFileName = newPath.split(/[\\/]/).pop() ?? trimmed;
+      useNotesStore.getState().applyNotePathChange(activeNote.path, newPath, newFileName);
       await refreshNotes(config.storage_path);
     } catch (err) {
       console.error('Failed to rename note:', err);

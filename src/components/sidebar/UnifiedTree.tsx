@@ -149,6 +149,10 @@ function formatDate(dateStr: string): string {
   return `${m}/${day}`;
 }
 
+function stripKnownExt(title: string): string {
+  return title.replace(/\.(md|markdown|txt)$/i, '');
+}
+
 /* ── Note context menu ── */
 interface NoteContextMenu {
   x: number; y: number;
@@ -490,11 +494,19 @@ export function UnifiedTree() {
   /* ── Create note (in right-clicked folder) ── */
   const handleNewFileInFolder = useCallback(async () => {
     if (!contextMenu || contextMenu.type !== 'folder') return;
+    const folderPath = contextMenu.project.path;
     try {
-      const note = await createNote(contextMenu.project.path, `Untitled-${Date.now()}`);
+      const note = await createNote(folderPath, `Untitled-${Date.now()}`);
+      // Expand the folder so the new row is visible for inline renaming
+      const st = useNotesStore.getState();
+      if (!st.expandedFolders.includes(folderPath)) {
+        st.toggleExpandedFolder(folderPath);
+      }
       await handleRefreshAll();
       await loadProjects(config.storage_path);
       await selectNote(note);
+      setRenamingNoteId(note.id);
+      setRenameNoteValue(stripKnownExt(note.title));
     } catch (e) { console.error('Failed to create note:', e); }
     setContextMenu(null);
   }, [contextMenu, handleRefreshAll, loadProjects, config.storage_path, selectNote]);
@@ -510,14 +522,22 @@ export function UnifiedTree() {
   const handleStartRenameNote = useCallback(() => {
     if (!contextMenu || contextMenu.type !== 'note') return;
     setRenamingNoteId(contextMenu.note.id);
-    setRenameNoteValue(contextMenu.note.title);
+    setRenameNoteValue(stripKnownExt(contextMenu.note.title));
     setContextMenu(null);
   }, [contextMenu]);
 
   const handleRenameNoteSubmit = useCallback(async (note: NoteMetadata) => {
-    if (!renameNoteValue.trim() || renameNoteValue === note.title) { setRenamingNoteId(null); return; }
-    try { await renameNote(note.path, renameNoteValue.trim()); await handleRefreshAll(); }
-    catch (e) { console.error('Failed to rename note:', e); }
+    const newTitle = renameNoteValue.trim();
+    if (!newTitle || newTitle === note.title || newTitle === stripKnownExt(note.title)) { setRenamingNoteId(null); return; }
+    try {
+      const newPath = await renameNote(note.path, newTitle);
+      const newFileName = newPath.split(/[\\/]/).pop() ?? newTitle;
+      useNotesStore.getState().applyNotePathChange(note.path, newPath, newFileName);
+      await handleRefreshAll();
+      if (useNotesStore.getState().activeNote?.path === newPath) {
+        window.dispatchEvent(new CustomEvent('editor-focus'));
+      }
+    } catch (e) { console.error('Failed to rename note:', e); }
     setRenamingNoteId(null);
   }, [renameNoteValue, handleRefreshAll]);
 
@@ -612,7 +632,7 @@ export function UnifiedTree() {
       const an = useNotesStore.getState().activeNote;
       if (!an) return;
       setRenamingNoteId(an.id);
-      setRenameNoteValue(an.title);
+      setRenameNoteValue(stripKnownExt(an.title));
     };
     window.addEventListener('sidebar-rename-note', handler);
     return () => window.removeEventListener('sidebar-rename-note', handler);
@@ -644,6 +664,7 @@ export function UnifiedTree() {
           <input
             autoFocus value={renameNoteValue}
             onChange={(e) => setRenameNoteValue(e.target.value)}
+            onFocus={(e) => e.target.select()}
             onBlur={() => handleRenameNoteSubmit(note)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleRenameNoteSubmit(note); if (e.key === 'Escape') setRenamingNoteId(null); }}
             className="flex-1 min-w-0 px-1 py-0 text-xs rounded outline-none"
@@ -736,7 +757,9 @@ export function UnifiedTree() {
           const notePath = e.dataTransfer.getData('application/note-path');
           if (notePath) {
             try {
-              await moveNote(notePath, project.path);
+              const newPath = await moveNote(notePath, project.path);
+              const newFileName = newPath.split(/[\\/]/).pop() ?? '';
+              useNotesStore.getState().applyNotePathChange(notePath, newPath, newFileName);
               await handleRefreshAll();
               await loadProjects(config.storage_path);
             } catch (err) { console.error('Failed to move note:', err); }

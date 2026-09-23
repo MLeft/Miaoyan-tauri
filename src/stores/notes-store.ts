@@ -70,6 +70,7 @@ interface NotesState {
   setSortMode: (mode: SortMode) => void;
   toggleSortDirection: () => void;
   refreshNotes: (rootPath: string) => Promise<void>;
+  applyNotePathChange: (oldPath: string, newPath: string, newTitle: string) => void;
   setNotesFromCache: (loaded: NoteMetadata[]) => void;
   mergeProjectChunk: (project: Project) => void;
   markRecentWrite: (path: string) => void;
@@ -674,6 +675,23 @@ export const useNotesStore = create<NotesState>((set, get) => {
       await get().loadNotes(rootPath);
     }
     await get().loadProjects(rootPath);
+  },
+
+  applyNotePathChange: (oldPath, newPath, newTitle) => {
+    const state = get();
+    const updatedTabs = state.openTabs.map(t =>
+      t.path === oldPath
+        ? { ...t, path: newPath, note: { ...t.note, id: newPath, path: newPath, title: newTitle } }
+        : t
+    );
+    const updates: Partial<NotesState> = { openTabs: updatedTabs };
+    if (state.activeTabPath === oldPath) {
+      updates.activeTabPath = newPath;
+    }
+    if (state.activeNote && state.activeNote.path === oldPath) {
+      updates.activeNote = { ...state.activeNote, id: newPath, path: newPath, title: newTitle };
+    }
+    set(updates);
   },
 
   mergeProjectChunk: (project) => {

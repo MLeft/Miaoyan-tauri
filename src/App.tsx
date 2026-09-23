@@ -430,6 +430,8 @@ export default function App() {
       const note = await createNote(folder, `Untitled-${Date.now()}`);
       await refreshNotes(storagePath);
       await selectNote(note);
+      // Enter inline rename on the new note once its row appears in the tree
+      window.dispatchEvent(new CustomEvent('sidebar-rename-note'));
     } catch (e) { console.error('Failed to create note:', e); }
   };
 
