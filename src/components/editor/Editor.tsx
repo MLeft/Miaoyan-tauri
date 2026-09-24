@@ -301,7 +301,10 @@ export function Editor() {
     const trimmed = title.trim();
     if (!trimmed || !activeNote || trimmed === activeNote.title || trimmed === activeNote.title.replace(/\.(md|markdown|txt)$/i, '')) return;
     try {
+      // 标记自身操作，吞掉 rename 引发的 watcher 回环事件，避免增量更新与全量刷新竞争
+      useNotesStore.getState().markRecentWrite(activeNote.path);
       const newPath = await renameNote(activeNote.path, trimmed);
+      useNotesStore.getState().markRecentWrite(newPath);
       const newFileName = newPath.split(/[\\/]/).pop() ?? trimmed;
       useNotesStore.getState().applyNotePathChange(activeNote.path, newPath, newFileName);
       await refreshNotes(config.storage_path);

@@ -679,6 +679,7 @@ export const useNotesStore = create<NotesState>((set, get) => {
 
   applyNotePathChange: (oldPath, newPath, newTitle) => {
     const state = get();
+    const oldKey = oldPath.replace(/\\/g, '/');
     const updatedTabs = state.openTabs.map(t =>
       t.path === oldPath
         ? { ...t, path: newPath, note: { ...t.note, id: newPath, path: newPath, title: newTitle } }
@@ -691,7 +692,17 @@ export const useNotesStore = create<NotesState>((set, get) => {
     if (state.activeNote && state.activeNote.path === oldPath) {
       updates.activeNote = { ...state.activeNote, id: newPath, path: newPath, title: newTitle };
     }
+    const oldNote = state.notes.find(n => n.path.replace(/\\/g, '/') === oldKey);
+    if (oldNote) {
+      // 本地同步换行：全量刷新是渐进 chunk 合并，旧路径行要到扫描收尾才消失，期间会新旧标题并存闪现
+      updates.notes = [
+        ...state.notes.filter(n => n.path.replace(/\\/g, '/') !== oldKey),
+        { ...oldNote, id: newPath, path: newPath, title: newTitle },
+      ].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
+    }
     set(updates);
+    // 侧栏的 allNotes 是组件级缓存，store 改不到——广播给 UnifiedTree 自行换行
+    window.dispatchEvent(new CustomEvent('note-path-changed', { detail: { oldPath, newPath, newTitle } }));
   },
 
   mergeProjectChunk: (project) => {

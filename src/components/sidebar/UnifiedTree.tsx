@@ -350,6 +350,33 @@ export function UnifiedTree() {
     });
   }, []);
 
+  /* ── 增量换行（重命名/移动）：本地立即把旧路径行换成新路径行，零全扫 ──
+     全量刷新的 chunk 是逐目录渐进并入，旧路径行要到扫描收尾才消失——期间新旧标题会并存闪现 */
+  const renameNoteLocal = useCallback((oldPath: string, newPath: string, newTitle: string) => {
+    const oldKey = oldPath.replace(/\\/g, '/').toLowerCase();
+    setAllNotes(prev => {
+      const existing = prev.find(n => n.path.replace(/\\/g, '/').toLowerCase() === oldKey);
+      if (!existing) return prev;
+      const next = [
+        ...prev.filter(n => n.path.replace(/\\/g, '/').toLowerCase() !== oldKey),
+        { ...existing, id: newPath, path: newPath, title: newTitle },
+      ].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
+      allNotesRef.current = next;
+      useNotesStore.getState().setNotesFromCache(next);
+      return next;
+    });
+  }, []);
+
+  // 重命名/移动的所有入口（侧栏行内、编辑器标题栏、拖拽移动）都经 applyNotePathChange 广播
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { oldPath, newPath, newTitle } = (e as CustomEvent<{ oldPath: string; newPath: string; newTitle: string }>).detail;
+      renameNoteLocal(oldPath, newPath, newTitle);
+    };
+    window.addEventListener('note-path-changed', handler);
+    return () => window.removeEventListener('note-path-changed', handler);
+  }, [renameNoteLocal]);
+
   /* ── Watch filesystem changes ── */
   useEffect(() => {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -530,9 +557,13 @@ export function UnifiedTree() {
     const newTitle = renameNoteValue.trim();
     if (!newTitle || newTitle === note.title || newTitle === stripKnownExt(note.title)) { setRenamingNoteId(null); return; }
     try {
+      // 标记自身操作，吞掉 rename 引发的 watcher 回环事件，避免增量更新与全量刷新竞争
+      useNotesStore.getState().markRecentWrite(note.path);
       const newPath = await renameNote(note.path, newTitle);
+      useNotesStore.getState().markRecentWrite(newPath);
       const newFileName = newPath.split(/[\\/]/).pop() ?? newTitle;
       useNotesStore.getState().applyNotePathChange(note.path, newPath, newFileName);
+      setRenamingNoteId(null);
       await handleRefreshAll();
       if (useNotesStore.getState().activeNote?.path === newPath) {
         window.dispatchEvent(new CustomEvent('editor-focus'));
@@ -757,7 +788,9 @@ export function UnifiedTree() {
           const notePath = e.dataTransfer.getData('application/note-path');
           if (notePath) {
             try {
+              useNotesStore.getState().markRecentWrite(notePath);
               const newPath = await moveNote(notePath, project.path);
+              useNotesStore.getState().markRecentWrite(newPath);
               const newFileName = newPath.split(/[\\/]/).pop() ?? '';
               useNotesStore.getState().applyNotePathChange(notePath, newPath, newFileName);
               await handleRefreshAll();
