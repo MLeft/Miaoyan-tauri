@@ -85,7 +85,8 @@
     "presentationFontSize": "簡報字型大小",
     "lineHeight": "行高",
     "imageUploadService": "圖片上傳服務",
-    "imageUploadNone": "無（本地儲存）"
+    "imageUploadNone": "無（本地儲存）",
+    "about": "關於"
   },
   "contextMenu": {
     "pin": "置頂",
@@ -149,6 +150,16 @@
     "skip": "跳過此版本",
     "downloading": "下載中...",
     "ready": "準備安裝"
+  },
+  "about": {
+    "version": "當前版本",
+    "checkUpdate": "檢查更新",
+    "checking": "正在檢查更新…",
+    "latest": "已是最新版本",
+    "newVersion": "發現新版本",
+    "download": "前往下載",
+    "checkFailed": "檢查失敗，請稍後重試",
+    "repository": "GitHub 倉庫"
   },
   "sync": {
     "icloudAvailable": "iCloud 同步可用",

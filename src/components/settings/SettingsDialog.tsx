@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../stores/settings-store';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
+import { getVersion } from '@tauri-apps/api/app';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { setAlwaysOnTop, detectCloudSync, getMdAssociationStatus, setMdAssociation, type CloudSyncInfo } from '../../services/tauri-bridge';
 
-type Tab = 'interface' | 'experience' | 'editor' | 'typography';
+type Tab = 'interface' | 'experience' | 'editor' | 'typography' | 'about';
 
 // 原版 PrefsFormMetrics
 const LABEL_WIDTH = 164;   // px
@@ -42,6 +44,7 @@ export function SettingsDialog({ onClose }: Props) {
     { id: 'experience', label: t('settings.editor') },
     { id: 'editor', label: t('settings.preview') },
     { id: 'typography', label: t('settings.typography') },
+    { id: 'about', label: t('settings.about') },
   ];
 
   const handleSelectFolder = async () => {
@@ -484,6 +487,8 @@ export function SettingsDialog({ onClose }: Props) {
                 </Row>
               </div>
             )}
+
+            {activeTab === 'about' && <AboutPanel />}
           </div>
         </div>
       </div>
@@ -754,6 +759,145 @@ function ICloudSyncHint({
       <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
         {t('sync.hint')}
       </span>
+    </div>
+  );
+}
+
+// ── 关于面板：版本信息 + GitHub 更新检查 ──
+const GITHUB_REPO_URL = 'https://github.com/MLeft/MiaoYan-tauri';
+const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/MLeft/MiaoYan-tauri/releases/latest';
+
+type UpdateCheckState =
+  | { status: 'idle' }
+  | { status: 'checking' }
+  | { status: 'latest' }
+  | { status: 'available'; version: string; url: string }
+  | { status: 'error' };
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.replace(/^v/i, '').split('.').map(Number);
+  const pb = b.replace(/^v/i, '').split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function AboutPanel() {
+  const { t } = useTranslation();
+  const [version, setVersion] = useState('');
+  const [checkState, setCheckState] = useState<UpdateCheckState>({ status: 'idle' });
+
+  const checkUpdate = async (current: string) => {
+    setCheckState({ status: 'checking' });
+    try {
+      const res = await fetch(GITHUB_LATEST_RELEASE_API);
+      if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+      const data = await res.json();
+      const latest = String(data.tag_name || '').replace(/^v/i, '');
+      if (latest && current && compareVersions(latest, current) > 0) {
+        setCheckState({ status: 'available', version: latest, url: data.html_url });
+      } else {
+        setCheckState({ status: 'latest' });
+      }
+    } catch (err) {
+      console.warn('Update check failed:', err);
+      setCheckState({ status: 'error' });
+    }
+  };
+
+  // 打开关于页时加载版本并自动检查一次
+  useEffect(() => {
+    let cancelled = false;
+    getVersion()
+      .then((v) => {
+        if (cancelled) return;
+        setVersion(v);
+        checkUpdate(v);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const checking = checkState.status === 'checking';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: ROW_GAP }}>
+      <Row label={`${t('about.version')}:`}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{
+              fontSize: 13,
+              fontFamily: 'ui-monospace, monospace',
+              color: 'var(--text-primary)',
+            }}>
+              {version ? `v${version}` : '—'}
+            </span>
+            <MacButton onClick={() => { if (!checking && version) checkUpdate(version); }}>
+              {checking ? t('about.checking') : t('about.checkUpdate')}
+            </MacButton>
+          </div>
+          {checkState.status === 'latest' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: 'var(--success-color)', display: 'inline-block' }} />
+              <span style={{ fontSize: 12, color: 'var(--success-color)' }}>{t('about.latest')}</span>
+            </div>
+          )}
+          {checkState.status === 'available' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                {t('about.newVersion')} v{checkState.version}
+              </span>
+              <button
+                onClick={() => openUrl(checkState.url)}
+                style={{
+                  height: ROW_HEIGHT - 4,
+                  paddingLeft: 12,
+                  paddingRight: 12,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  border: 'none',
+                  borderRadius: 6,
+                  backgroundColor: 'var(--accent)',
+                  color: 'white',
+                  cursor: 'pointer',
+                  outline: 'none',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {t('about.download')}
+              </button>
+            </div>
+          )}
+          {checkState.status === 'error' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: 'var(--danger-color)', display: 'inline-block' }} />
+              <span style={{ fontSize: 12, color: 'var(--danger-color)' }}>{t('about.checkFailed')}</span>
+            </div>
+          )}
+        </div>
+      </Row>
+
+      <Separator />
+
+      <Row label="GitHub:">
+        <button
+          onClick={() => openUrl(GITHUB_REPO_URL)}
+          style={{
+            fontSize: 13,
+            color: 'var(--system-blue)',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: 0,
+            textDecoration: 'underline',
+          }}
+        >
+          github.com/MLeft/MiaoYan-tauri
+        </button>
+      </Row>
     </div>
   );
 }

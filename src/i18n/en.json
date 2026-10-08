@@ -89,7 +89,8 @@
     "lineHeight": "Line Height",
     "imageUploadService": "Image Upload Service",
     "imageUploadNone": "None (Local)",
-    "debugLog": "Debug Log"
+    "debugLog": "Debug Log",
+    "about": "About"
   },
   "contextMenu": {
     "pin": "Pin",
@@ -154,6 +155,16 @@
     "skip": "Skip This Version",
     "downloading": "Downloading...",
     "ready": "Ready to install"
+  },
+  "about": {
+    "version": "Version",
+    "checkUpdate": "Check for Updates",
+    "checking": "Checking for updates…",
+    "latest": "You're up to date",
+    "newVersion": "New version available",
+    "download": "Download",
+    "checkFailed": "Check failed. Please try again later.",
+    "repository": "GitHub Repository"
   },
   "sync": {
     "icloudAvailable": "iCloud Sync Available",

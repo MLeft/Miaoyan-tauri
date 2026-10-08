@@ -89,7 +89,8 @@
     "lineHeight": "行高",
     "imageUploadService": "图片上传服务",
     "imageUploadNone": "无（本地保存）",
-    "debugLog": "调试日志"
+    "debugLog": "调试日志",
+    "about": "关于"
   },
   "contextMenu": {
     "pin": "置顶",
@@ -154,6 +155,16 @@
     "skip": "跳过此版本",
     "downloading": "下载中...",
     "ready": "准备安装"
+  },
+  "about": {
+    "version": "当前版本",
+    "checkUpdate": "检查更新",
+    "checking": "正在检查更新…",
+    "latest": "已是最新版本",
+    "newVersion": "发现新版本",
+    "download": "前往下载",
+    "checkFailed": "检查失败，请稍后重试",
+    "repository": "GitHub 仓库"
   },
   "sync": {
     "icloudAvailable": "iCloud 同步可用",

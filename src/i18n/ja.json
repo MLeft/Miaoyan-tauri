@@ -85,7 +85,8 @@
     "presentationFontSize": "プレゼンテーションフォントサイズ",
     "lineHeight": "行の高さ",
     "imageUploadService": "画像アップロードサービス",
-    "imageUploadNone": "なし（ローカル保存）"
+    "imageUploadNone": "なし（ローカル保存）",
+    "about": "このアプリについて"
   },
   "contextMenu": {
     "pin": "ピン留め",
@@ -149,6 +150,16 @@
     "skip": "このバージョンをスキップ",
     "downloading": "ダウンロード中...",
     "ready": "インストール準備完了"
+  },
+  "about": {
+    "version": "バージョン",
+    "checkUpdate": "アップデートを確認",
+    "checking": "アップデートを確認中…",
+    "latest": "最新版です",
+    "newVersion": "新しいバージョンがあります",
+    "download": "ダウンロード",
+    "checkFailed": "確認に失敗しました。しばらくしてからもう一度お試しください。",
+    "repository": "GitHub リポジトリ"
   },
   "sync": {
     "icloudAvailable": "iCloud 同期利用可能",

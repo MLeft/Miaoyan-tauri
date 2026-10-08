@@ -76,7 +76,8 @@
     "quickLaunch": "Inicio rápido",
     "clear": "Limpiar",
     "imageUploadService": "Servicio de carga de imágenes",
-    "imageUploadNone": "Ninguno (local)"
+    "imageUploadNone": "Ninguno (local)",
+    "about": "Acerca de"
   },
   "contextMenu": {
     "pin": "Fijar",
@@ -130,6 +131,16 @@
     "skip": "Omitir esta versión",
     "downloading": "Descargando...",
     "ready": "Listo para instalar"
+  },
+  "about": {
+    "version": "Versión",
+    "checkUpdate": "Buscar actualizaciones",
+    "checking": "Buscando actualizaciones…",
+    "latest": "Tienes la última versión",
+    "newVersion": "Nueva versión disponible",
+    "download": "Descargar",
+    "checkFailed": "Error al buscar actualizaciones. Inténtalo de nuevo más tarde.",
+    "repository": "Repositorio de GitHub"
   },
   "sync": {
     "icloudAvailable": "Sincronización iCloud disponible",

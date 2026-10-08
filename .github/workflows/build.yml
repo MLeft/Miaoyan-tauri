@@ -138,10 +138,25 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Publish release (draft -> published)
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish release (draft -> published, with changelog)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n1)
           test -n "$id" || { echo "release for $GITHUB_REF_NAME not found"; exit 1; }
-          gh api "repos/$GITHUB_REPOSITORY/releases/$id" -X PATCH -F draft=false
+
+          # Release 说明优先取 dev_note/CHANGES.md 中「## 版本号（日期）」条目
+          body=$(awk -v tag="$GITHUB_REF_NAME" '
+            index($0, "## " tag "（") == 1 || index($0, "## " tag " (") == 1 { insec=1; next }
+            /^## / { insec=0 }
+            insec { print }
+          ' dev_note/CHANGES.md)
+          if [ -z "$body" ]; then
+            echo "no changelog section for $GITHUB_REF_NAME in dev_note/CHANGES.md, falling back to auto-generated notes"
+            body=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body)
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/$id" -X PATCH -F draft=false -f body="$body"
