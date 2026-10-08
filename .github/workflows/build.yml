@@ -153,7 +153,7 @@ jobs:
             index($0, "## " tag "（") == 1 || index($0, "## " tag " (") == 1 { insec=1; next }
             /^## / { insec=0 }
             insec { print }
-          ' dev_note/CHANGES.md)
+          ' dev_note/CHANGES.md | tr -d '\r')
           if [ -z "$body" ]; then
             echo "no changelog section for $GITHUB_REF_NAME in dev_note/CHANGES.md, falling back to auto-generated notes"
             body=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body)
