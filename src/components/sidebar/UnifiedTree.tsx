@@ -377,6 +377,29 @@ export function UnifiedTree() {
     return () => window.removeEventListener('note-path-changed', handler);
   }, [renameNoteLocal]);
 
+  /* ── 增量插行（新建/复制）：本地立即插入新笔记行，零全扫 ──
+     全量刷新会让目录树先收空壳 chunk 再收完整 chunk，展开的子树收起又展开 */
+  const insertNoteLocal = useCallback((note: NoteMetadata) => {
+    const key = note.path.replace(/\\/g, '/');
+    setAllNotes(prev => {
+      const next = [note, ...prev.filter(n => n.path.replace(/\\/g, '/') !== key)]
+        .sort((a, b) => b.modified_at.localeCompare(a.modified_at));
+      allNotesRef.current = next;
+      useNotesStore.getState().setNotesFromCache(next);
+      return next;
+    });
+  }, []);
+
+  // 新建的所有入口（侧栏右键新建、工具栏新建、Cmd+D 复制、deep-link）都经 registerCreatedNote 广播
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { note } = (e as CustomEvent<{ note: NoteMetadata }>).detail;
+      insertNoteLocal(note);
+    };
+    window.addEventListener('note-created', handler);
+    return () => window.removeEventListener('note-created', handler);
+  }, [insertNoteLocal]);
+
   /* ── Watch filesystem changes ── */
   useEffect(() => {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -529,14 +552,13 @@ export function UnifiedTree() {
       if (!st.expandedFolders.includes(folderPath)) {
         st.toggleExpandedFolder(folderPath);
       }
-      await handleRefreshAll();
-      await loadProjects(config.storage_path);
+      st.registerCreatedNote(note);
       await selectNote(note);
       setRenamingNoteId(note.id);
       setRenameNoteValue(stripKnownExt(note.title));
     } catch (e) { console.error('Failed to create note:', e); }
     setContextMenu(null);
-  }, [contextMenu, handleRefreshAll, loadProjects, config.storage_path, selectNote]);
+  }, [contextMenu, selectNote]);
 
   /* ── Note context menu handlers ── */
   const handleDeleteNote = useCallback(async () => {
@@ -564,13 +586,12 @@ export function UnifiedTree() {
       const newFileName = newPath.split(/[\\/]/).pop() ?? newTitle;
       useNotesStore.getState().applyNotePathChange(note.path, newPath, newFileName);
       setRenamingNoteId(null);
-      await handleRefreshAll();
       if (useNotesStore.getState().activeNote?.path === newPath) {
         window.dispatchEvent(new CustomEvent('editor-focus'));
       }
     } catch (e) { console.error('Failed to rename note:', e); }
     setRenamingNoteId(null);
-  }, [renameNoteValue, handleRefreshAll]);
+  }, [renameNoteValue]);
 
   const handleEncryptNote = useCallback(() => {
     if (!contextMenu || contextMenu.type !== 'note') return;
@@ -793,8 +814,6 @@ export function UnifiedTree() {
               useNotesStore.getState().markRecentWrite(newPath);
               const newFileName = newPath.split(/[\\/]/).pop() ?? '';
               useNotesStore.getState().applyNotePathChange(notePath, newPath, newFileName);
-              await handleRefreshAll();
-              await loadProjects(config.storage_path);
             } catch (err) { console.error('Failed to move note:', err); }
           }
           e.currentTarget.style.backgroundColor = isActive ? 'var(--accent-light)' : 'transparent';

@@ -71,6 +71,7 @@ interface NotesState {
   toggleSortDirection: () => void;
   refreshNotes: (rootPath: string) => Promise<void>;
   applyNotePathChange: (oldPath: string, newPath: string, newTitle: string) => void;
+  registerCreatedNote: (note: NoteMetadata) => void;
   setNotesFromCache: (loaded: NoteMetadata[]) => void;
   mergeProjectChunk: (project: Project) => void;
   markRecentWrite: (path: string) => void;
@@ -705,6 +706,13 @@ export const useNotesStore = create<NotesState>((set, get) => {
     window.dispatchEvent(new CustomEvent('note-path-changed', { detail: { oldPath, newPath, newTitle } }));
   },
 
+  registerCreatedNote: (note) => {
+    // 新建/复制后本地插行：吞掉 watcher 对新文件的回环事件，并广播给 UnifiedTree 插入行，
+    // 不再走全量刷新（目录树空壳重建会让展开的子树收起再展开）
+    get().markRecentWrite(note.path);
+    window.dispatchEvent(new CustomEvent('note-created', { detail: { note } }));
+  },
+
   mergeProjectChunk: (project) => {
     // 渐进加载：顶层目录空壳/完整 chunk 立即并入；已存在时原位替换保持行序稳定，新目录追加末尾
     // 在途扫描的 chunk 可能属于已移除文件夹：不在当前根之下的 chunk 忽略，避免移除行复活
@@ -757,7 +765,7 @@ export const useNotesStore = create<NotesState>((set, get) => {
       const folder = activeFolder || rootPath;
       const newNote = await createNote(folder, copyTitle);
       await writeNote(newNote.path, result.content);
-      await get().refreshNotes(rootPath);
+      get().registerCreatedNote(newNote);
     } catch (e) {
       console.error('Failed to duplicate note:', e);
     }

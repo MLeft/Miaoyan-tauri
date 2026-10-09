@@ -422,13 +422,13 @@ export default function App() {
   };
 
   const handleNewNote = async () => {
-    const { activeFolder, refreshNotes, selectNote } = useNotesStore.getState();
+    const { activeFolder, selectNote } = useNotesStore.getState();
     const storagePath = useSettingsStore.getState().config.storage_path;
     const folder = activeFolder || storagePath;
     if (!folder) return;
     try {
       const note = await createNote(folder, `Untitled-${Date.now()}`);
-      await refreshNotes(storagePath);
+      useNotesStore.getState().registerCreatedNote(note);
       await selectNote(note);
       // Enter inline rename on the new note once its row appears in the tree
       window.dispatchEvent(new CustomEvent('sidebar-rename-note'));
@@ -464,7 +464,7 @@ export default function App() {
               if (content) {
                 await writeNote(note.path, content);
               }
-              await store.refreshNotes(storagePath);
+              store.registerCreatedNote(note);
               await store.selectNote(note);
             }).catch(e => console.error('Deep-link: failed to create note:', e));
           }

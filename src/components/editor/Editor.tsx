@@ -104,7 +104,6 @@ export function Editor() {
   const activeNote = useNotesStore((s) => s.activeNote);
   const activeContent = useNotesStore((s) => s.activeContent);
   const updateContent = useNotesStore((s) => s.updateContent);
-  const refreshNotes = useNotesStore((s) => s.refreshNotes);
   const config = useSettingsStore((s) => s.config);
   // 窄订阅：editorScrollLine 每个滚动帧都变，全量订阅会让编辑器在滚动时逐帧重渲染
   const setEditorScrollLine = useEditorStore((s) => s.setEditorScrollLine);
@@ -307,12 +306,11 @@ export function Editor() {
       useNotesStore.getState().markRecentWrite(newPath);
       const newFileName = newPath.split(/[\\/]/).pop() ?? trimmed;
       useNotesStore.getState().applyNotePathChange(activeNote.path, newPath, newFileName);
-      await refreshNotes(config.storage_path);
     } catch (err) {
       console.error('Failed to rename note:', err);
       setTitle(activeNote.title);
     }
-  }, [title, activeNote, config.storage_path, refreshNotes]);
+  }, [title, activeNote]);
 
   const handleTitleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {

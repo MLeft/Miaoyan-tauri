@@ -138,6 +138,7 @@ Start-Process "$env:LOCALAPPDATA\MiaoYan\miaoyan.exe"
 | parse 防抖 | `Preview.tsx` | `activeContent.length > 100_000 ? 600 : 250` ms；renderSeq 丢弃过期渲染 |
 | 窄订阅 | 各组件 | 只订阅需要的 store 字段（如 `editorScrollLine`、`viewMode`），禁止全量订阅 |
 | 增量导入/移除 | `mod.rs scan_folder` + `App.tsx importExternalFolder` + `UnifiedTree removeFolderLocal` | 导入只扫新目录（chunk 自动合并）、移除本地立即过滤（行与计数同帧消失），均零全扫；extra_folders 纯新增/纯移除跳过全扫；bridge 去重键含参数；loadProjects/reloadAllNotes 迟到双向保护（新增行保留、移除行裁剪）；notes-chunk/project-chunk/fs 增量按当前根有效性过滤，防移除行复活 |
+| 新建/重命名/移动本地插行换行 | `notes-store registerCreatedNote/applyNotePathChange` + `UnifiedTree insertNoteLocal`（`note-created`/`note-path-changed` 窗口广播） | 新建（工具栏/侧栏右键/Cmd+D/deep-link）经 `registerCreatedNote`：先 `markRecentWrite` 吞 watcher 回环，再广播本地插行（setNotesFromCache 同步缓存）；重命名/移动复用 `note-path-changed` 本地换行。均零全扫——全量刷新会让 `get_projects` 先发空壳 chunk，展开的子树收起又展开 |
 | 批注高亮防抖 | `Preview.tsx` | 250ms；`annotations.length === 0` 时直接跳过 |
 
 ---
@@ -184,6 +185,7 @@ Start-Process "$env:LOCALAPPDATA\MiaoYan\miaoyan.exe"
     注意本地提交（LF 规范化）与 API 上传（磁盘原始内容）可能导致无实质差异的重复文件出现在远端提交中，无害
 12. **样式硬编码颜色** → 先查 `globals.css` token（`--toast-*`/`--success-*`/`--shadow-*`）；见 ai-dev-pitfalls.md #7
 13. **配置增删操作走全扫** → 增量（导入扫新目录/移除本地过滤）+ 迟到双向保护 + 当前根有效性过滤；见 ai-dev-pitfalls.md #8
+14. **新建/重命名/移动触发全量刷新** → 目录树收起再展开（空壳 chunk）；改走本地插行/换行广播（`registerCreatedNote`/`note-path-changed`），见 §5 机制表
 
 ---
 

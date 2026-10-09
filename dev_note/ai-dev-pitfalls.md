@@ -119,3 +119,15 @@
 - **迟到保护必须双向**：权威结果按当前配置裁剪（新增行保留、移除行过滤）；所有合并入口（notes-chunk / project-chunk / fs 增量）按当前根（storage_path + extra_folders）有效性过滤，防在途扫描复活已移除行
 
 **案例**：修复后 CDP 50ms 采样：点 ✕ 后 `t=+1ms` 文件夹行与计数同帧消失，2s 内无复活、无迟到更新。
+
+## 9. 新建/重命名文件触发全量刷新，目录树收起又展开
+
+**问题**：侧栏新建文件、重命名（含编辑器标题栏提交、拖拽移动）后，展开的文件夹树先收起再展开。
+
+**根因**：这些入口复用 `handleRefreshAll + loadProjects` 全量刷新；Rust `get_projects` 对每个顶层目录先发**空壳 project-chunk**（children: Vec::new()），扫描完再发完整 chunk → `mergeProjectChunk` 原地替换，展开子树的 children 瞬间清空 → 收起，完整 chunk 到达后再展开。
+
+**解决方案**：
+- 新建（工具栏/侧栏右键/Cmd+D/deep-link）→ `notes-store registerCreatedNote`：`markRecentWrite` 吞掉 watcher 对自家写入的回环事件，再广播 `note-created` → `UnifiedTree insertNoteLocal` 本地插行（同步 `setNotesFromCache`）
+- 重命名/移动 → 复用 `note-path-changed` 本地换行（v1.0.38 已建立）
+- 均零全扫；watcher 的 dir 级 needsFull 全量路径保持不动（那是真外部结构变化）
+
