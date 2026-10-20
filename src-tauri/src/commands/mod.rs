@@ -753,35 +753,26 @@ fn add_footnote_backlinks(html: String) -> String {
 #[command]
 pub fn start_watching(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
     use crate::services::watcher;
-    use crate::services::watcher::WatchMsg;
-    use notify::Watcher;
     use std::sync::mpsc;
     use std::sync::{Mutex, OnceLock};
 
     // 同一时刻只保留一个 watcher：配置变化重新监听时先停掉旧的，避免事件翻倍
-    static PREV_TX: OnceLock<Mutex<Option<mpsc::Sender<WatchMsg>>>> = OnceLock::new();
+    static PREV_TX: OnceLock<Mutex<Option<mpsc::Sender<()>>>> = OnceLock::new();
     let slot = PREV_TX.get_or_init(|| Mutex::new(None));
     if let Some(prev) = slot.lock().unwrap().take() {
-        let _ = prev.send(WatchMsg::Stop);
+        let _ = prev.send(());
     }
 
-    let (tx, rx) = mpsc::channel::<WatchMsg>();
-    *slot.lock().unwrap() = Some(tx.clone());
+    let (tx, rx) = mpsc::channel::<()>();
+    *slot.lock().unwrap() = Some(tx);
 
     std::thread::spawn(move || {
-        let mut watcher = match watcher::start_watcher(app_handle, &paths, tx) {
+        let _watcher = match watcher::start_watcher(app_handle, &paths) {
             Some(w) => w,
             None => return,
         };
-        // 阻塞等待控制消息（无事件时线程休眠，零 CPU）
-        while let Ok(msg) = rx.recv() {
-            match msg {
-                WatchMsg::WatchDir(dir) => {
-                    let _ = watcher.watch(&dir, notify::RecursiveMode::NonRecursive);
-                }
-                WatchMsg::Stop => break, // 退出后 watcher 被 drop，自动取消监听
-            }
-        }
+        // 阻塞等待配置变化/退出信号；线程退出后 watcher 被 drop，自动取消监听
+        let _ = rx.recv();
     });
     Ok(())
 }

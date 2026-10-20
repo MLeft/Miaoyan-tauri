@@ -131,3 +131,15 @@
 - 重命名/移动 → 复用 `note-path-changed` 本地换行（v1.0.38 已建立）
 - 均零全扫；watcher 的 dir 级 needsFull 全量路径保持不动（那是真外部结构变化）
 
+---
+
+## 10. Windows 文件监听句柄锁住父目录
+
+**问题**：笔记库设在代码/工作目录（如 `D:\code_for_task`）时，资源管理器里重命名或删除 `docs`、`docs\superpowers` 报“需要来自 ... 的权限”（错误码 5），但更深层没有子目录的 `specs` 可以正常改名；退出妙言后立即恢复。
+
+**根因**：watcher 对根下每个子目录单独注册非递归监听，notify 的每个 watch 都持有目录句柄。Windows 重命名目录时要求其**后代目录都没有打开的句柄**——即使句柄带 `FILE_SHARE_DELETE` 也一样；被监听目录自身可改名（共享删除），但它的父目录会报 `ERROR_ACCESS_DENIED`。因此 `specs`（没有子目录被监听）可改名，`superpowers`/`docs` 被锁。
+
+**解决方案**：
+- 每个监听根只注册一条 `RecursiveMode::Recursive` 监听，根下所有层级由同一条句柄覆盖，不再逐目录持有句柄
+- 忽略目录（`.git`/`node_modules`/`dist` 等）继续在事件回调用 `under_ignored_relative` 过滤；代价是这些目录的事件会先由系统投递再丢弃
+- 回归测试：`services::watcher::tests::recursive_watch_keeps_subdirectories_renameable`（退回逐目录监听会立即失败）

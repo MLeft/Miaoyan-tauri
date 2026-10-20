@@ -139,6 +139,7 @@ Start-Process "$env:LOCALAPPDATA\MiaoYan\miaoyan.exe"
 | 窄订阅 | 各组件 | 只订阅需要的 store 字段（如 `editorScrollLine`、`viewMode`），禁止全量订阅 |
 | 增量导入/移除 | `mod.rs scan_folder` + `App.tsx importExternalFolder` + `UnifiedTree removeFolderLocal` | 导入只扫新目录（chunk 自动合并）、移除本地立即过滤（行与计数同帧消失），均零全扫；extra_folders 纯新增/纯移除跳过全扫；bridge 去重键含参数；loadProjects/reloadAllNotes 迟到双向保护（新增行保留、移除行裁剪）；notes-chunk/project-chunk/fs 增量按当前根有效性过滤，防移除行复活 |
 | 新建/重命名/移动本地插行换行 | `notes-store registerCreatedNote/applyNotePathChange` + `UnifiedTree insertNoteLocal`（`note-created`/`note-path-changed` 窗口广播） | 新建（工具栏/侧栏右键/Cmd+D/deep-link）经 `registerCreatedNote`：先 `markRecentWrite` 吞 watcher 回环，再广播本地插行（setNotesFromCache 同步缓存）；重命名/移动复用 `note-path-changed` 本地换行。均零全扫——全量刷新会让 `get_projects` 先发空壳 chunk，展开的子树收起又展开 |
+| 文件监听 | `services/watcher.rs` | **每个根目录只注册一条递归监听**；禁止逐目录非递归注册——Windows 下子目录句柄会阻止父目录重命名/删除（资源管理器报“拒绝访问”）；忽略目录仍在事件回调过滤 |
 | 批注高亮防抖 | `Preview.tsx` | 250ms；`annotations.length === 0` 时直接跳过 |
 
 ---

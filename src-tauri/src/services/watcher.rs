@@ -4,16 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
-use walkdir::WalkDir;
 use crate::services::storage;
-
-/// 监听线程的控制消息
-pub enum WatchMsg {
-    /// 新建目录 → 补注册监听
-    WatchDir(PathBuf),
-    /// 停止并释放当前 watcher
-    Stop,
-}
 
 /// 判断路径相对监听根的部分是否落在忽略目录中。
 /// 只检查根以下的层级，避免把隐藏的监听根本身（如 .multica）误判为忽略目录。
@@ -54,12 +45,10 @@ fn merge_event_type(old: &str, new: &str) -> &'static str {
 pub fn start_watcher(
     app_handle: AppHandle,
     paths: &[String],
-    new_dir_tx: mpsc::Sender<WatchMsg>,
 ) -> Option<notify::RecommendedWatcher> {
     let handle = app_handle.clone();
     let roots: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
     let roots_for_cb = roots.clone();
-    let tx_for_cb = new_dir_tx.clone();
 
     // 事件合流：notify 对单次写盘会发出多个 Modify 事件（Data/Content/Metadata），
     // 且自动保存 1.5s 一次——在 200ms 窗口内按路径去重合并后再 emit，
@@ -107,15 +96,6 @@ pub fn start_watcher(
     let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
         match res {
             Ok(event) => {
-                // 新建目录 → 请求追加监听（逐目录非递归注册模式下必须动态补注册）
-                if matches!(event.kind, EventKind::Create(_)) {
-                    for p in &event.paths {
-                        if p.is_dir() && !under_ignored_relative(p, &roots_for_cb) {
-                            let _ = tx_for_cb.send(WatchMsg::WatchDir(p.clone()));
-                        }
-                    }
-                }
-
                 let event_type = match event.kind {
                     EventKind::Create(_) => "create",
                     EventKind::Modify(_) => "modify",
@@ -142,28 +122,93 @@ pub fn start_watcher(
         }
     }).ok()?;
 
-    // 逐目录非递归注册：只监听笔记相关目录，跳过 .git / node_modules /
-    // 构建产物等忽略目录，避免代码仓库活动产生事件风暴
-    for root in &roots {
-        if !root.exists() {
-            continue;
-        }
-        let _ = watcher.watch(root, RecursiveMode::NonRecursive);
-        for entry in WalkDir::new(root)
-            .into_iter()
-            .filter_entry(|e| {
-                if e.depth() == 0 {
-                    return true;
-                }
-                !storage::is_ignored_dir(&e.file_name().to_string_lossy())
-            })
-            .filter_map(|e| e.ok())
-        {
-            if entry.depth() > 0 && entry.file_type().is_dir() {
-                let _ = watcher.watch(entry.path(), RecursiveMode::NonRecursive);
-            }
-        }
-    }
+    watch_roots(&mut watcher, &roots);
 
     Some(watcher)
+}
+
+/// 每个根目录只注册一条递归监听。
+/// 逐目录监听会为每个子目录持有句柄，Windows 上会阻止父目录重命名/删除
+/// （ERROR_ACCESS_DENIED），用户无法在资源管理器里整理笔记库。
+fn watch_roots<W: Watcher>(watcher: &mut W, roots: &[PathBuf]) {
+    for root in roots {
+        if root.exists() {
+            let _ = watcher.watch(root, RecursiveMode::Recursive);
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_root() -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "miaoyan-watcher-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn recursive_watch_keeps_subdirectories_renameable() {
+        let root = temp_root();
+        let child = root.join("child");
+        fs::create_dir_all(child.join("grandchild")).unwrap();
+
+        let mut watcher =
+            notify::recommended_watcher(|res: Result<Event, notify::Error>| {
+                let _ = res;
+            })
+            .unwrap();
+        watch_roots(&mut watcher, std::slice::from_ref(&root));
+
+        // 回归：逐目录监听时，grandchild 的句柄会让 parent/child 重命名报“拒绝访问”
+        let renamed = root.join("child-renamed");
+        fs::rename(&child, &renamed)
+            .expect("watched roots must keep their subdirectories renameable");
+
+        drop(watcher);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn recursive_watch_reports_nested_changes() {
+        let root = temp_root();
+        let nested = root.join("a").join("b");
+        fs::create_dir_all(&nested).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+                if let Ok(event) = res {
+                    let _ = tx.send(event);
+                }
+            })
+            .unwrap();
+        watch_roots(&mut watcher, std::slice::from_ref(&root));
+
+        fs::write(nested.join("note.md"), "hello").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let event = rx
+                .recv_timeout(remaining)
+                .expect("nested note change should be reported");
+            if event
+                .paths
+                .iter()
+                .any(|p| p.file_name().map(|n| n == "note.md").unwrap_or(false))
+            {
+                break;
+            }
+        }
+
+        drop(watcher);
+        fs::remove_dir_all(&root).ok();
+    }
 }
