@@ -1,3 +1,4 @@
+use notify::event::{ModifyKind, RenameMode};
 use notify::{Watcher, RecursiveMode, Event, EventKind};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,39 @@ fn is_note_file(pb: &Path) -> bool {
     }
     let ext = pb.extension().unwrap_or_default().to_string_lossy().to_lowercase();
     matches!(ext.as_str(), "md" | "markdown" | "txt" | "html" | "htm") || name.ends_with(".md.encrypted")
+}
+
+/// 目录的普通 Modify 事件只代表「某个子项变了」——Windows 对目录内任意文件的
+/// 新建/删除/重命名都会上报父目录 Modify。子项自身已有独立事件，若把它当作
+/// 结构变化处理，一次普通文件变更就会触发整棵目录树全量重扫。
+fn is_child_change_noise(kind: &EventKind, is_dir: bool) -> bool {
+    is_dir
+        && matches!(kind, EventKind::Modify(kind) if !matches!(kind, ModifyKind::Name(_)))
+}
+
+/// 目录结构事件（目录新建/重命名/路径移除）单独走 fs-structure，
+/// 前端按已知路径做增量增删换行，不再全量扫描
+fn emit_structure(
+    app: &AppHandle,
+    kind: &str,
+    path: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+) {
+    let _ = app.emit(
+        "fs-structure",
+        serde_json::json!({ "kind": kind, "path": path, "from": from, "to": to }),
+    );
+}
+
+/// 取出 1 秒内挂起的重命名源路径（Windows 把 From/To 拆成两条事件上报）
+fn take_pending_rename(pending: &mut Vec<(String, Instant)>) -> Option<String> {
+    pending.retain(|(_, at)| at.elapsed() < Duration::from_millis(1000));
+    if pending.is_empty() {
+        None
+    } else {
+        Some(pending.remove(0).0)
+    }
 }
 
 /// 事件类型合并优先级：remove > create > modify（同一路径窗口内多次事件取最具破坏性的）
@@ -93,32 +127,130 @@ pub fn start_watcher(
         }
     });
 
+    let handle_for_watcher = handle.clone();
+    let mut pending_renames: Vec<(String, Instant)> = Vec::new();
+
     let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-        match res {
-            Ok(event) => {
-                let event_type = match event.kind {
-                    EventKind::Create(_) => "create",
-                    EventKind::Modify(_) => "modify",
-                    EventKind::Remove(_) => "remove",
-                    _ => return,
-                };
-                let paths: Vec<String> = event.paths.iter()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .collect();
-                // 只转发与笔记相关的事件：忽略目录下的变更、临时文件、
-                // 非支持扩展名的文件一律跳过；合并交给合流线程
-                for p in &paths {
+        let Ok(event) = res else { return; };
+
+        match event.kind {
+            EventKind::Create(_) => {
+                for p in &event.paths {
                     let pb = Path::new(p);
                     if under_ignored_relative(pb, &roots_for_cb) {
                         continue;
                     }
-                    let relevant = pb.is_dir() || is_note_file(pb);
-                    if relevant {
-                        let _ = evt_tx.send((p.clone(), event_type));
+                    if pb.is_dir() {
+                        emit_structure(&handle_for_watcher, "dir-create", Some(&p.to_string_lossy()), None, None);
+                    } else if is_note_file(pb) {
+                        let _ = evt_tx.send((p.to_string_lossy().to_string(), "create"));
                     }
                 }
             }
-            Err(_) => {}
+            EventKind::Modify(ModifyKind::Name(mode)) => {
+                match mode {
+                    RenameMode::Both => {
+                        // macOS/Linux 单事件带 [from, to] 两个路径
+                        if event.paths.len() >= 2 {
+                            let from = event.paths[0].to_string_lossy().to_string();
+                            let to = event.paths[1].to_string_lossy().to_string();
+                            if !under_ignored_relative(Path::new(&from), &roots_for_cb)
+                                && !under_ignored_relative(Path::new(&to), &roots_for_cb)
+                            {
+                                if Path::new(&to).is_dir() {
+                                    emit_structure(&handle_for_watcher, "dir-rename", None, Some(&from), Some(&to));
+                                } else if is_note_file(Path::new(&to)) {
+                                    let _ = evt_tx.send((from, "remove"));
+                                    let _ = evt_tx.send((to, "create"));
+                                }
+                            }
+                        }
+                    }
+                    RenameMode::From => {
+                        for p in &event.paths {
+                            let pb = Path::new(p);
+                            if under_ignored_relative(pb, &roots_for_cb) {
+                                continue;
+                            }
+                            // 改名后源路径已不存在，无法判断原本是否目录：
+                            // 先挂起等待 To 配对；笔记源路径同时按删除上报，
+                            // 保证配对失败时旧行也不会残留
+                            if is_note_file(pb) {
+                                let _ = evt_tx.send((p.to_string_lossy().to_string(), "remove"));
+                            }
+                            pending_renames.push((p.to_string_lossy().to_string(), Instant::now()));
+                        }
+                    }
+                    RenameMode::To => {
+                        for p in &event.paths {
+                            let pb = Path::new(p);
+                            if under_ignored_relative(pb, &roots_for_cb) {
+                                continue;
+                            }
+                            let path = p.to_string_lossy().to_string();
+                            if pb.is_dir() {
+                                match take_pending_rename(&mut pending_renames) {
+                                    Some(from) => emit_structure(
+                                        &handle_for_watcher, "dir-rename", None, Some(&from), Some(&path),
+                                    ),
+                                    None => emit_structure(
+                                        &handle_for_watcher, "dir-create", Some(&path), None, None,
+                                    ),
+                                }
+                            } else if is_note_file(pb) {
+                                let _ = take_pending_rename(&mut pending_renames);
+                                let _ = evt_tx.send((path, "create"));
+                            } else {
+                                let _ = take_pending_rename(&mut pending_renames);
+                            }
+                        }
+                    }
+                    RenameMode::Any | RenameMode::Other => {
+                        for p in &event.paths {
+                            let pb = Path::new(p);
+                            if under_ignored_relative(pb, &roots_for_cb) {
+                                continue;
+                            }
+                            let path = p.to_string_lossy().to_string();
+                            if pb.is_dir() {
+                                emit_structure(&handle_for_watcher, "dir-create", Some(&path), None, None);
+                            } else if is_note_file(pb) {
+                                let _ = evt_tx.send((path, "create"));
+                            }
+                        }
+                    }
+                }
+            }
+            EventKind::Modify(_) => {
+                for p in &event.paths {
+                    let pb = Path::new(p);
+                    if under_ignored_relative(pb, &roots_for_cb) {
+                        continue;
+                    }
+                    if is_child_change_noise(&event.kind, pb.is_dir()) {
+                        continue;
+                    }
+                    if is_note_file(pb) {
+                        let _ = evt_tx.send((p.to_string_lossy().to_string(), "modify"));
+                    }
+                }
+            }
+            EventKind::Remove(_) => {
+                for p in &event.paths {
+                    let pb = Path::new(p);
+                    if under_ignored_relative(pb, &roots_for_cb) {
+                        continue;
+                    }
+                    if is_note_file(pb) {
+                        let _ = evt_tx.send((p.to_string_lossy().to_string(), "remove"));
+                    } else {
+                        // 删除后的目录无法再 is_dir()：把非笔记路径交给前端，
+                        // 由前端按已知目录/笔记前缀判断是否为目录移除
+                        emit_structure(&handle_for_watcher, "path-remove", Some(&p.to_string_lossy()), None, None);
+                    }
+                }
+            }
+            _ => {}
         }
     }).ok()?;
 
@@ -174,6 +306,24 @@ mod tests {
 
         drop(watcher);
         fs::remove_dir_all(&root).ok();
+    }
+
+    // 回归：Windows 对目录内任意子项的新增/删除/重命名都会上报父目录 Modify(Any)。
+    // 若把它当结构变化，创建/删除一个笔记就会触发全库重扫（7000+ 笔记约 4-6 秒）。
+    #[test]
+    fn child_entry_changes_on_directory_are_not_structure_events() {
+        use notify::event::{CreateKind, RemoveKind};
+
+        assert!(is_child_change_noise(&EventKind::Modify(ModifyKind::Any), true));
+        assert!(is_child_change_noise(&EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)), true));
+        assert!(!is_child_change_noise(&EventKind::Modify(ModifyKind::Any), false));
+        assert!(!is_child_change_noise(
+            &EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            true
+        ));
+        assert!(!is_child_change_noise(&EventKind::Create(CreateKind::Any), true));
+        assert!(!is_child_change_noise(&EventKind::Remove(RemoveKind::Any), true));
+        assert!(!is_child_change_noise(&EventKind::Modify(ModifyKind::Any), false));
     }
 
     #[test]

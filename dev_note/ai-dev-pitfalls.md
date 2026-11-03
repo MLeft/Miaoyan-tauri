@@ -129,7 +129,7 @@
 **解决方案**：
 - 新建（工具栏/侧栏右键/Cmd+D/deep-link）→ `notes-store registerCreatedNote`：`markRecentWrite` 吞掉 watcher 对自家写入的回环事件，再广播 `note-created` → `UnifiedTree insertNoteLocal` 本地插行（同步 `setNotesFromCache`）
 - 重命名/移动 → 复用 `note-path-changed` 本地换行（v1.0.38 已建立）
-- 均零全扫；watcher 的 dir 级 needsFull 全量路径保持不动（那是真外部结构变化）
+- 均零全扫；目录结构变化另走 `fs-structure` 增量路径（见 §11），不再保留 dir 级 needsFull 全扫
 
 ---
 
@@ -143,3 +143,24 @@
 - 每个监听根只注册一条 `RecursiveMode::Recursive` 监听，根下所有层级由同一条句柄覆盖，不再逐目录持有句柄
 - 忽略目录（`.git`/`node_modules`/`dist` 等）继续在事件回调用 `under_ignored_relative` 过滤；代价是这些目录的事件会先由系统投递再丢弃
 - 回归测试：`services::watcher::tests::recursive_watch_keeps_subdirectories_renameable`（退回逐目录监听会立即失败）
+
+---
+
+## 11. 任意文件变更触发父目录全量重扫（目录树整块刷新）
+
+**问题**：新建/删除/重命名任意一个笔记，甚至外部脚本每 10 分钟往库里写一条笔记，左侧目录树都会整块刷新；大库实测每次全量 `get_all_notes` 耗时 4–6 秒（7338 条笔记），日志里 `[perf] scan-notes` 一天出现 130+ 次。
+
+**根因**：Windows 的 `ReadDirectoryChangesW` 对目录内**任意子项**的新增/删除/重命名都会额外上报一条**父目录** `Modify(Any)` 事件。旧回调把「路径是目录」一律当作结构变化，前端 `needsFull` → `reloadAllNotes + loadProjects` 全量重扫。用 notify 探针实测事件形状：
+- 写文件内容：只有文件 `Modify`，无父目录事件
+- 新建/重命名/删除文件：文件事件 + `Modify(Any) path=<父目录> is_dir=true`
+- 删除目录：`Remove` 的路径已不存在（`is_dir=false`），只有父目录 `Modify` 能感知
+
+**解决方案**：
+- `watcher.rs` 用 `is_child_change_noise` 丢弃「已存在目录的普通 Modify」——子项自己的事件已单独上报
+- 真结构变化拆成独立 `fs-structure` 事件：`dir-create` / `dir-rename` / `path-remove`；Windows 把重命名拆成 `Name(From)`+`Name(To)` 两条事件，watcher 内用 1s 挂起队列配对
+- 前端 `UnifiedTree` 本地增量应用：`dirCreateLocal` 插节点、`dirRenameLocal` 按前缀换项目树与笔记路径（含标签）、`dirRemoveLocal` 按前缀摘除；**不再有 needsFull 全扫分支**
+- 文件 `modify` 原位替换元数据、**不重排父目录**（只有新增行参与排序）；自身写入回环在 5s 窗口内持续压制（不再命中一次就删标记）
+- 监听/全量扫描都要做迟到保护：扫描期间新增的笔记与目录，不能被晚到（可能耗时 20s+）的权威结果抹掉
+- 回归测试：`services::watcher::tests::child_entry_changes_on_directory_are_not_structure_events`
+
+**验证**：真实运行时（CDP）外部新建/修改/改名/删除笔记与目录，`scan-notes` 计数保持不变；仅 App 启动的两次全扫计入。

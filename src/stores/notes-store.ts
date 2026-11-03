@@ -20,6 +20,57 @@ import type { ViewMode } from './editor-store';
 // 应用自身最近写入的文件（path → 时间戳），不进 store 避免触发订阅
 const recentWrites = new Map<string, number>();
 
+const projectKey = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+
+function collectProjectPaths(list: Project[], out: Set<string>) {
+  for (const p of list) {
+    out.add(projectKey(p.path));
+    collectProjectPaths(p.children, out);
+  }
+}
+
+function collectProjectNodes(list: Project[], out: Array<{ node: Project; depth: number }>, depth = 0) {
+  for (const p of list) {
+    out.push({ node: p, depth });
+    collectProjectNodes(p.children, out, depth + 1);
+  }
+}
+
+const parentKeyOf = (p: string) => {
+  const s = p.replace(/\\/g, '/');
+  const idx = s.lastIndexOf('/');
+  return idx > 0 ? s.slice(0, idx).toLowerCase() : '';
+};
+
+/// 把晚到的目录节点插回扫描结果：顶层追加，嵌套按父路径递归插入
+function insertProjectNode(list: Project[], roots: string[], node: Project): Project[] {
+  const parentKey = parentKeyOf(node.path);
+  if (roots.some((r) => projectKey(r) === parentKey)) {
+    if (list.some((p) => projectKey(p.path) === projectKey(node.path))) return list;
+    return [...list, node];
+  }
+  let changed = false;
+  const next = list.map((p) => {
+    if (projectKey(p.path) === parentKey) {
+      changed = true;
+      if (p.children.some((c) => projectKey(c.path) === projectKey(node.path))) return p;
+      return {
+        ...p,
+        children: [...p.children, node].sort((a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+        ),
+      };
+    }
+    const children = insertProjectNode(p.children, roots, node);
+    if (children !== p.children) {
+      changed = true;
+      return { ...p, children };
+    }
+    return p;
+  });
+  return changed ? next : list;
+}
+
 export interface OpenTab {
   path: string;
   note: NoteMetadata;
@@ -71,6 +122,7 @@ interface NotesState {
   toggleSortDirection: () => void;
   refreshNotes: (rootPath: string) => Promise<void>;
   applyNotePathChange: (oldPath: string, newPath: string, newTitle: string) => void;
+  applyFolderPathChange: (fromPath: string, toPath: string) => void;
   registerCreatedNote: (note: NoteMetadata) => void;
   setNotesFromCache: (loaded: NoteMetadata[]) => void;
   mergeProjectChunk: (project: Project) => void;
@@ -147,6 +199,10 @@ export const useNotesStore = create<NotesState>((set, get) => {
   clearExpandedFolders: () => set({ expandedFolders: [] }),
 
   loadProjects: async (rootPath) => {
+    // 扫描很慢（大库 + 额外文件夹可达十几秒）：先记下调用时已存在的目录，
+    // 扫描期间本地新增的目录不能被晚到的权威结果抹掉
+    const beforePaths = new Set<string>();
+    collectProjectPaths(get().projects, beforePaths);
     try {
       const config = useSettingsStore.getState().config;
       const callFolders = (config.extra_folders || []).map(p => p.replace(/\\/g, '/').toLowerCase());
@@ -165,13 +221,27 @@ export const useNotesStore = create<NotesState>((set, get) => {
             return !removed.some(r => pp === r || pp.startsWith(r + '/'));
           });
         }
-        if (added.length === 0) return { projects: result };
-        const inResult = new Set(result.map(p => p.path.replace(/\\/g, '/').toLowerCase()));
-        const late = s.projects.filter(p => {
-          const pp = p.path.replace(/\\/g, '/').toLowerCase();
-          return !inResult.has(pp) && added.some(a => pp === a || pp.startsWith(a + '/'));
-        });
-        return { projects: [...result, ...late] };
+        if (added.length > 0) {
+          const inResult = new Set(result.map(p => p.path.replace(/\\/g, '/').toLowerCase()));
+          const late = s.projects.filter(p => {
+            const pp = p.path.replace(/\\/g, '/').toLowerCase();
+            return !inResult.has(pp) && added.some(a => pp === a || pp.startsWith(a + '/'));
+          });
+          result = [...result, ...late];
+        }
+        // 扫描期间本地新增的目录（新建/外部监听插行）插回结果，避免扫描收尾时整行消失
+        const resultPaths = new Set<string>();
+        collectProjectPaths(result, resultPaths);
+        const lateEntries: Array<{ node: Project; depth: number }> = [];
+        collectProjectNodes(s.projects, lateEntries);
+        const roots = [rootPath, ...(useSettingsStore.getState().config.extra_folders || [])];
+        for (const { node } of lateEntries.sort((a, b) => a.depth - b.depth)) {
+          const key = projectKey(node.path);
+          if (beforePaths.has(key) || resultPaths.has(key)) continue;
+          result = insertProjectNode(result, roots, node);
+          resultPaths.add(key);
+        }
+        return { projects: result };
       });
     } catch (e) {
       console.error('Failed to load projects:', e);
@@ -706,6 +776,34 @@ export const useNotesStore = create<NotesState>((set, get) => {
     window.dispatchEvent(new CustomEvent('note-path-changed', { detail: { oldPath, newPath, newTitle } }));
   },
 
+  applyFolderPathChange: (fromPath, toPath) => {
+    // 目录改名：所有落在该目录下的标签/活动笔记/展开状态按前缀换路径，
+    // 与树侧保持一致，避免外部改名后旧路径残留在标签栏里
+    const fromSlash = fromPath.replace(/\\/g, '/');
+    const fromKey = fromSlash.toLowerCase();
+    const toSlash = toPath.replace(/\\/g, '/');
+    const isUnder = (p: string) => {
+      const np = p.replace(/\\/g, '/').toLowerCase();
+      return np === fromKey || np.startsWith(`${fromKey}/`);
+    };
+    const remap = (p: string) => toSlash + p.replace(/\\/g, '/').slice(fromSlash.length);
+    const remapNote = (n: NoteMetadata): NoteMetadata => {
+      if (!isUnder(n.path)) return n;
+      const path = remap(n.path);
+      return { ...n, id: path, path };
+    };
+    set(s => ({
+      openTabs: s.openTabs.map(t => isUnder(t.path)
+        ? { ...t, path: remap(t.path), note: remapNote(t.note) }
+        : t),
+      activeTabPath: s.activeTabPath && isUnder(s.activeTabPath) ? remap(s.activeTabPath) : s.activeTabPath,
+      activeNote: s.activeNote && isUnder(s.activeNote.path) ? remapNote(s.activeNote) : s.activeNote,
+      notes: s.notes.map(remapNote),
+      activeFolder: s.activeFolder && isUnder(s.activeFolder) ? remap(s.activeFolder) : s.activeFolder,
+      expandedFolders: s.expandedFolders.map(p => (isUnder(p) ? remap(p) : p)),
+    }));
+  },
+
   registerCreatedNote: (note) => {
     // 新建/复制后本地插行：吞掉 watcher 对新文件的回环事件，并广播给 UnifiedTree 插入行，
     // 不再走全量刷新（目录树空壳重建会让展开的子树收起再展开）
@@ -742,17 +840,22 @@ export const useNotesStore = create<NotesState>((set, get) => {
   },
 
   // 应用自身写入标记：watcher 会回环触发自己保存的文件事件，
-  // 命中时直接吞掉，避免每次自动保存都引发刷新
+  // 命中时直接吞掉，避免每次自动保存都引发刷新。
+  // 一次写盘会拆成多条回环事件（Windows 还会额外上报父目录），
+  // 因此窗口内持续压制而不是命中一次就删除标记
   markRecentWrite: (path) => {
-    recentWrites.set(path.replace(/\\/g, '/'), Date.now());
+    const now = Date.now();
+    for (const [key, at] of recentWrites) {
+      if (now - at > 10_000) recentWrites.delete(key);
+    }
+    recentWrites.set(path.replace(/\\/g, '/'), now);
   },
   consumeRecentWrite: (path) => {
     const key = path.replace(/\\/g, '/');
     const ts = recentWrites.get(key);
-    if (ts !== undefined) {
-      recentWrites.delete(key);
-      return Date.now() - ts < 5000;
-    }
+    if (ts === undefined) return false;
+    if (Date.now() - ts < 5000) return true;
+    recentWrites.delete(key);
     return false;
   },
 

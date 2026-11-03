@@ -719,8 +719,10 @@ export default function App() {
         const parent = activeFolder || storagePath;
         if (!parent) return;
         try {
-          await createFolder(parent, name);
-          await useNotesStore.getState().refreshNotes(storagePath);
+          const newPath = await createFolder(parent, name);
+          // 本地插行，避免为新增一个空目录触发全库重扫
+          useNotesStore.getState().markRecentWrite(newPath);
+          window.dispatchEvent(new CustomEvent('folder-created', { detail: { path: newPath } }));
         } catch (err) { console.error('Failed to create folder:', err); }
       }
       // Cmd+R: rename active note
