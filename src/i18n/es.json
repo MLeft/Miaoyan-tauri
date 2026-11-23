@@ -179,5 +179,21 @@
   },
   "tabMenu": {
     "copyPath": "Copiar ruta"
+  },
+  "pdf": {
+    "loading": "Cargando PDF…",
+    "loadFailed": "Error al cargar el PDF",
+    "passwordProtected": "Este PDF está protegido con contraseña y aún no se puede previsualizar",
+    "zoomIn": "Acercar",
+    "zoomOut": "Alejar",
+    "fitWidth": "Ajustar al ancho",
+    "pageInput": "Número de página",
+    "search": "Buscar en el PDF",
+    "searchPlaceholder": "Buscar en el PDF",
+    "searching": "Buscando…",
+    "noMatches": "Sin coincidencias",
+    "prevMatch": "Coincidencia anterior",
+    "nextMatch": "Coincidencia siguiente",
+    "closeSearch": "Cerrar búsqueda"
   }
 }

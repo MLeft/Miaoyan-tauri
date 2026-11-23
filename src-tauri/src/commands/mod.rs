@@ -246,6 +246,9 @@ pub fn get_notes_metadata(paths: Vec<String>, root_path: String, extra_folders: 
 
 #[command]
 pub fn read_note(path: String) -> Result<NoteContent, String> {
+    if storage::is_pdf_file(Path::new(&path)) {
+        return Err("PDF files are binary and cannot be read as text".to_string());
+    }
     let content = fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read file: {}", e))?;
     Ok(NoteContent {
@@ -462,9 +465,12 @@ fn search_notes_impl(root_path: String, query: String) -> Vec<NoteMetadata> {
                     score += 50;
                 }
             }
-            if let Ok(content) = fs::read_to_string(&note.path) {
-                if content.to_lowercase().contains(&query_lower) {
-                    score += 10;
+            // PDF 为二进制，只按文件名匹配，避免为搜索白读整份大文件
+            if !note.path.to_lowercase().ends_with(".pdf") {
+                if let Ok(content) = fs::read_to_string(&note.path) {
+                    if content.to_lowercase().contains(&query_lower) {
+                        score += 10;
+                    }
                 }
             }
             if score > 0 { Some((note, score)) } else { None }

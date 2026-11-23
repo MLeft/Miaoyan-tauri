@@ -16,6 +16,7 @@ import { useSettingsStore } from './settings-store';
 import { perfReport } from '../services/perf';
 import { useEditorStore } from './editor-store';
 import type { ViewMode } from './editor-store';
+import { isPdfPath } from '../utils/fileType';
 
 // 应用自身最近写入的文件（path → 时间戳），不进 store 避免触发订阅
 const recentWrites = new Map<string, number>();
@@ -313,19 +314,25 @@ export const useNotesStore = create<NotesState>((set, get) => {
     }
 
     try {
-      const t0 = performance.now();
-      const result = await readNote(note.path);
-      // 读盘超过 100ms 记录（切换笔记卡顿定位）
-      const readMs = performance.now() - t0;
-      if (readMs > 100) perfReport('read-note', readMs, `len=${result.content.length}`);
-      const isEmpty = !result.content.trim();
+      const isPdf = isPdfPath(note.path);
+      let content = '';
+      if (!isPdf) {
+        const t0 = performance.now();
+        const result = await readNote(note.path);
+        // 读盘超过 100ms 记录（切换笔记卡顿定位）
+        const readMs = performance.now() - t0;
+        if (readMs > 100) perfReport('read-note', readMs, `len=${result.content.length}`);
+        content = result.content;
+      }
+      // PDF 只读预览：不读文本、不进编辑视图
+      const isEmpty = !isPdf && !content.trim();
       const viewMode: ViewMode = isEmpty ? 'split' : 'preview';
 
       // Create new tab
       const newTab: OpenTab = {
         path: note.path,
         note,
-        content: result.content,
+        content,
         isDirty: false,
         viewMode,
       };
@@ -335,7 +342,7 @@ export const useNotesStore = create<NotesState>((set, get) => {
         activeNote: note,
         openTabs: [...s.openTabs, newTab],
         activeTabPath: note.path,
-        activeContent: result.content,
+        activeContent: content,
         isLoading: false,
         isDirty: false,
       }));
@@ -598,7 +605,8 @@ export const useNotesStore = create<NotesState>((set, get) => {
       const tab = updatedTabs[i];
       const normalizedPath = tab.path.replace(/\\/g, '/');
       // Only reload if file was changed externally and tab is not dirty
-      if (changedSet.has(normalizedPath) && !tab.isDirty) {
+      // PDF 由 PdfViewer 自行加载，不经由文本内容重载
+      if (changedSet.has(normalizedPath) && !tab.isDirty && !isPdfPath(tab.path)) {
         try {
           const result = await readNote(tab.path);
           updatedTabs[i] = { ...tab, content: result.content };
@@ -861,7 +869,7 @@ export const useNotesStore = create<NotesState>((set, get) => {
 
   duplicateNote: async (rootPath) => {
     const { activeNote, activeFolder } = get();
-    if (!activeNote) return;
+    if (!activeNote || isPdfPath(activeNote.path)) return;
     try {
       const result = await readNote(activeNote.path);
       const copyTitle = `${activeNote.title} copy`;
@@ -892,34 +900,35 @@ export const useNotesStore = create<NotesState>((set, get) => {
 
   openTemporaryFile: async (path: string) => {
     try {
-      const content = await readNote(path);
+      const isPdf = isPdfPath(path);
+      const content = isPdf ? '' : (await readNote(path)).content;
       const meta: NoteMetadata = {
         id: path,
-        title: path.split('/').pop()?.replace('.md', '') || 'Untitled',
+        title: path.split('/').pop()?.replace(/\.(md|pdf)$/i, '') || 'Untitled',
         path,
         folder: path.substring(0, path.lastIndexOf('/')),
         created_at: new Date().toISOString(),
         modified_at: new Date().toISOString(),
         pinned: false,
-        size: content.content.length,
+        size: content.length,
         is_encrypted: false,
       };
       // Add as tab
       const newTab: OpenTab = {
         path,
         note: meta,
-        content: content.content,
+        content,
         isDirty: false,
-        viewMode: 'split',
+        viewMode: isPdf ? 'preview' : 'split',
       };
       set((s) => ({
         openTabs: [...s.openTabs.filter(t => t.path !== path), newTab],
         activeTabPath: path,
         activeNote: meta,
-        activeContent: content.content,
+        activeContent: content,
         isTemporaryFile: true,
       }));
-      useEditorStore.getState().setViewMode('split');
+      useEditorStore.getState().setViewMode(isPdf ? 'preview' : 'split');
     } catch (e) {
       console.error('Failed to open temporary file:', e);
     }

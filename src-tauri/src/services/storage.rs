@@ -72,6 +72,24 @@ pub fn scan_notes(root_path: &Path) -> Vec<NoteMetadata> {
     scan_notes_with_progress(root_path, |_| {})
 }
 
+/// 可收录文件白名单（扫描 / 单文件夹扫描 / is_note_file 共用同一份规则）
+pub fn has_supported_ext(path: &Path) -> bool {
+    let ext = path.extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    matches!(ext.as_str(), "md" | "markdown" | "txt" | "html" | "htm" | "pdf")
+        || is_encrypted_file(path)
+}
+
+/// PDF 是二进制文档：只读预览，不参与文本读写与全文搜索
+pub fn is_pdf_file(path: &Path) -> bool {
+    path.extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .eq_ignore_ascii_case("pdf")
+}
+
 /// 全量扫描（带进度回调）：每收录一个笔记文件调用一次 on_file，参数为当前累计数量。
 pub fn scan_notes_with_progress(root_path: &Path, mut on_file: impl FnMut(usize)) -> Vec<NoteMetadata> {
     let mut notes = Vec::new();
@@ -97,12 +115,7 @@ pub fn scan_notes_with_progress(root_path: &Path, mut on_file: impl FnMut(usize)
         }
         let path = entry.path();
 
-        let ext = path.extension()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase();
-        
-        if ext != "md" && ext != "markdown" && ext != "txt" && ext != "html" && ext != "htm" && !is_encrypted_file(path) {
+        if !has_supported_ext(&path) {
             continue;
         }
 
@@ -136,11 +149,7 @@ pub fn scan_notes_in_folder(folder_path: &Path, root_path: &Path) -> Vec<NoteMet
                 if !path.is_file() {
                     continue;
                 }
-                let ext = path.extension()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_lowercase();
-                if ext != "md" && ext != "markdown" && ext != "txt" && ext != "html" && ext != "htm" && !is_encrypted_file(&path) {
+                if !has_supported_ext(&path) {
                     continue;
                 }
                 if let Some(name) = path.file_name() {
@@ -209,12 +218,7 @@ pub fn build_note_metadata(path: &Path, root_path: &Path) -> Option<NoteMetadata
 
 /// 判断是否为可收录的笔记文件（扩展名白名单 + 非隐藏文件，与扫描 walker 的过滤规则一致）
 pub fn is_note_file(path: &Path) -> bool {
-    let ext = path.extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
-    let ext_ok = ext == "md" || ext == "markdown" || ext == "txt" || ext == "html" || ext == "htm" || is_encrypted_file(path);
-    if !ext_ok {
+    if !has_supported_ext(path) {
         return false;
     }
     !path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false)

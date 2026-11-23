@@ -9,6 +9,8 @@ import 'allotment/dist/style.css';
 import { Editor } from './components/editor/Editor';
 import { TabBar } from './components/editor/TabBar';
 import { Preview } from './components/preview/Preview';
+import { PdfViewer } from './components/pdf/PdfViewer';
+import { isPdfPath } from './utils/fileType';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { PresentationMode } from './components/presentation/PresentationMode';
 import { TableOfContents } from './components/shared/TableOfContents';
@@ -102,12 +104,12 @@ const IconEditor = () => (
   </svg>
 );
 
-function ToolbarButton({ onClick, active, title, children }: {
-  onClick: () => void; active?: boolean; title: string; children: React.ReactNode;
+function ToolbarButton({ onClick, active, title, disabled, children }: {
+  onClick: () => void; active?: boolean; title: string; disabled?: boolean; children: React.ReactNode;
 }) {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
       title={title}
       className="rounded flex items-center justify-center btn-hover-transition"
       style={{
@@ -115,9 +117,11 @@ function ToolbarButton({ onClick, active, title, children }: {
         height: '28px',
         color: active ? 'var(--accent-icon)' : 'var(--toolbar-icon-inactive)',
         backgroundColor: 'transparent',
+        opacity: disabled ? 0.35 : 1,
+        cursor: disabled ? 'default' : 'pointer',
       }}
       onMouseEnter={(e) => {
-        if (!active) {
+        if (!active && !disabled) {
           e.currentTarget.style.color = 'var(--toolbar-icon)';
           e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
         }
@@ -149,6 +153,8 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
   const setViewMode = useEditorStore((s) => s.setViewMode);
   const showToc = useEditorStore((s) => s.showToc);
   const toggleToc = useEditorStore((s) => s.toggleToc);
+  const activeNotePath = useNotesStore((s) => s.activeNote?.path);
+  const isPdfActive = !!activeNotePath && isPdfPath(activeNotePath);
   const { updateConfig } = useSettingsStore();
 
   const toggleSidebar = () => {
@@ -173,23 +179,23 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
           <IconSidebar />
         </ToolbarButton>
         <span className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border)' }} />
-        <ToolbarButton onClick={onFormat} title={`${t('toolbar.format')} (Cmd+Shift+L)`}>
+        <ToolbarButton onClick={onFormat} title={`${t('toolbar.format')} (Cmd+Shift+L)`} disabled={isPdfActive}>
           <IconFormat />
         </ToolbarButton>
-        <ToolbarButton onClick={() => setViewMode(viewMode === 'split' ? 'editor' : 'split')} active={viewMode === 'split'} title={t('toolbar.split')}>
+        <ToolbarButton onClick={() => setViewMode(viewMode === 'split' ? 'editor' : 'split')} active={viewMode === 'split'} title={t('toolbar.split')} disabled={isPdfActive}>
           <IconSplit />
         </ToolbarButton>
-        <ToolbarButton onClick={() => setViewMode('preview')} active={viewMode === 'preview'} title={`${t('toolbar.view')} (Cmd+3)`}>
+        <ToolbarButton onClick={() => setViewMode('preview')} active={viewMode === 'preview'} title={`${t('toolbar.view')} (Cmd+3)`} disabled={isPdfActive}>
           <IconPreview />
         </ToolbarButton>
         <span className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border)' }} />
-        <ToolbarButton onClick={toggleToc} active={showToc} title={t('toolbar.toc')}>
+        <ToolbarButton onClick={toggleToc} active={showToc} title={t('toolbar.toc')} disabled={isPdfActive}>
           <IconTOC />
         </ToolbarButton>
-        <ToolbarButton onClick={onTogglePresentation} title={`${t('toolbar.presentation')} (Cmd+4)`}>
+        <ToolbarButton onClick={onTogglePresentation} title={`${t('toolbar.presentation')} (Cmd+4)`} disabled={isPdfActive}>
           <IconPresentation />
         </ToolbarButton>
-        <ToolbarButton onClick={onToggleExport} title={`${t('toolbar.export')} (Cmd+Shift+E)`}>
+        <ToolbarButton onClick={onToggleExport} title={`${t('toolbar.export')} (Cmd+Shift+E)`} disabled={isPdfActive}>
           <IconExport />
         </ToolbarButton>
         <ToolbarButton onClick={onOpenSettings} title={`${t('toolbar.settings')} (Cmd+,)`}>
@@ -206,6 +212,7 @@ function EditorPane() {
   const showToc = useEditorStore((s) => s.showToc);
   const toggleToc = useEditorStore((s) => s.toggleToc);
   const activeNote = useNotesStore((s) => s.activeNote);
+  const isPdfActive = !!activeNote && isPdfPath(activeNote.path);
   const { config } = useSettingsStore();
   const [showBacklinks, setShowBacklinks] = useState(false);
 
@@ -237,7 +244,11 @@ function EditorPane() {
     <div className="h-full flex flex-col relative">
       <TabBar />
       <div className="flex-1 relative min-h-0 overflow-hidden">
-        {viewMode === 'split' ? (
+        {isPdfActive ? (
+          <div className="h-full">
+            <PdfViewer key={activeNote!.path} path={activeNote!.path} />
+          </div>
+        ) : viewMode === 'split' ? (
           <Allotment>
             <Allotment.Pane minSize={300}>
               <Editor />
@@ -255,13 +266,13 @@ function EditorPane() {
             <Editor />
           </div>
         )}
-        {showToc && <TableOfContents onNavigate={handleTocNavigate} onClose={toggleToc} />}
+        {showToc && !isPdfActive && <TableOfContents onNavigate={handleTocNavigate} onClose={toggleToc} />}
       </div>
       <Backlinks
         noteTitle={activeNote?.title || ''}
         rootPath={config.storage_path}
         onNavigate={handleBacklinkNavigate}
-        visible={showBacklinks}
+        visible={showBacklinks && !isPdfActive}
       />
     </div>
   );
@@ -573,7 +584,7 @@ export default function App() {
     '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico',
     '.mp3', '.mp4', '.mov', '.avi', '.mkv', '.wav', '.flac',
     '.zip', '.tar', '.gz', '.rar', '.7z',
-    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
     '.exe', '.dmg', '.app', '.dylib', '.so', '.dll',
   ]);
 
@@ -669,21 +680,23 @@ export default function App() {
   useEffect(() => {
     const handler = async (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
+      const pdfActivePath = useNotesStore.getState().activeNote?.path;
+      const pdfActive = !!pdfActivePath && isPdfPath(pdfActivePath);
       if (mod && e.key === '1') {
         e.preventDefault();
         const cfg = useSettingsStore.getState().config;
         useSettingsStore.getState().updateConfig({ show_sidebar: !cfg.show_sidebar });
       }
       if (mod && e.key === 'n' && !e.shiftKey) { e.preventDefault(); handleNewNote(); }
-      if (mod && e.key === '3') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); setViewMode(viewMode === 'preview' ? 'split' : 'preview'); }
-      if (mod && e.key === '4') { e.preventDefault(); setShowPresentation(p => !p); }
-      if (mod && e.key === '\\') { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); const modes: ViewMode[] = ['editor', 'split', 'preview']; const idx = modes.indexOf(viewMode); setViewMode(modes[(idx + 1) % modes.length]); }
+      if (mod && e.key === '3' && !pdfActive) { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); setViewMode(viewMode === 'preview' ? 'split' : 'preview'); }
+      if (mod && e.key === '4' && !pdfActive) { e.preventDefault(); setShowPresentation(p => !p); }
+      if (mod && e.key === '\\' && !pdfActive) { e.preventDefault(); const { viewMode, setViewMode } = useEditorStore.getState(); const modes: ViewMode[] = ['editor', 'split', 'preview']; const idx = modes.indexOf(viewMode); setViewMode(modes[(idx + 1) % modes.length]); }
       if (mod && e.key === 'i' && e.altKey) { e.preventDefault(); window.dispatchEvent(new CustomEvent('toggle-backlinks')); }
       if (mod && e.key === ',') { e.preventDefault(); setShowSettings(true); }
-      if (mod && e.key === 'e' && e.shiftKey) { e.preventDefault(); setShowExport(p => !p); }
+      if (mod && e.key === 'e' && e.shiftKey && !pdfActive) { e.preventDefault(); setShowExport(p => !p); }
       if (mod && e.key === 'l' && e.shiftKey) {
         e.preventDefault();
-        handleFormat();
+        if (!pdfActive) handleFormat();
       }
       // Cmd+W: close active tab
       if (mod && !e.shiftKey && e.key === 'w') {
@@ -700,9 +713,13 @@ export default function App() {
         const nextIdx = e.shiftKey ? (idx - 1 + openTabs.length) % openTabs.length : (idx + 1) % openTabs.length;
         switchTab(openTabs[nextIdx].path);
       }
-      // Cmd+F: focus sidebar search
+      // Cmd+F: PDF 内搜索 / 侧边栏搜索
       if (mod && !e.shiftKey && e.key === 'f') {
         e.preventDefault();
+        if (pdfActive) {
+          window.dispatchEvent(new CustomEvent('pdf-focus-search'));
+          return;
+        }
         // Ensure sidebar is visible
         if (!useSettingsStore.getState().config.show_sidebar) {
           useSettingsStore.getState().updateConfig({ show_sidebar: true });

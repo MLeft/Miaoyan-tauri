@@ -204,5 +204,21 @@
   },
   "tabMenu": {
     "copyPath": "Copy Path"
+  },
+  "pdf": {
+    "loading": "Loading PDF...",
+    "loadFailed": "Failed to load PDF",
+    "passwordProtected": "This PDF is password-protected and cannot be previewed yet",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fitWidth": "Fit width",
+    "pageInput": "Page number",
+    "search": "Search in PDF",
+    "searchPlaceholder": "Search in PDF",
+    "searching": "Searching...",
+    "noMatches": "No matches",
+    "prevMatch": "Previous match",
+    "nextMatch": "Next match",
+    "closeSearch": "Close search"
   }
 }

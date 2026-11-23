@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { SyncStatusIndicator } from '../shared/SyncStatus';
 import { EncryptionDialog } from '../shared/EncryptionDialog';
 import { perfReport } from '../../services/perf';
+import { isPdfPath } from '../../utils/fileType';
 
 /* ── SVG Icons ── */
 const IconHome = () => (
@@ -54,6 +55,13 @@ const IconFileTxt = () => (
     <line x1="8" y1="13" x2="16" y2="13" /><line x1="8" y1="17" x2="16" y2="17" />
   </svg>
 );
+/* PDF 文档图标（文档 + PDF 字样） */
+const IconFilePdf = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+    <path d="M7.5 17v-4h1.2a1.3 1.3 0 0 1 0 2.6H7.5M12.5 17v-4h1a2 2 0 0 1 0 4zM18.5 13H16.5v4" />
+  </svg>
+);
 
 /* 根据文件后缀返回对应的格式图标与颜色，方便一眼区分文件类型 */
 function getFileTypeIcon(path: string): { icon: React.ReactNode; color: string } {
@@ -63,6 +71,9 @@ function getFileTypeIcon(path: string): { icon: React.ReactNode; color: string }
   }
   if (lower.endsWith('.html') || lower.endsWith('.htm')) {
     return { icon: <IconFileHtml />, color: '#e37933' };
+  }
+  if (lower.endsWith('.pdf')) {
+    return { icon: <IconFilePdf />, color: '#e05252' };
   }
   if (lower.endsWith('.txt')) {
     return { icon: <IconFileTxt />, color: 'var(--text-tertiary)' };
@@ -139,7 +150,7 @@ function getParentPath(notePath: string): string {
 /* 判断是否为笔记文件路径（区分文件级事件与目录级事件） */
 function isNoteFilePath(p: string): boolean {
   const lower = p.toLowerCase();
-  return /\.(md|markdown|txt|html|htm)$/.test(lower) || lower.endsWith('.md.encrypted');
+  return /\.(md|markdown|txt|html|htm|pdf)$/.test(lower) || lower.endsWith('.md.encrypted');
 }
 
 function formatDate(dateStr: string): string {
@@ -1161,22 +1172,26 @@ export function UnifiedTree() {
                 {t('contextMenu.copyPath')}
               </button>
               <div style={{ borderTop: '1px solid var(--border)', margin: '3px 0' }} />
-              {contextMenu.note.is_encrypted ? (
-                <button onClick={handleRemoveEncryption} className="w-full text-left text-xs rounded-md"
-                  style={{ color: 'var(--text-primary)', padding: '5px 12px' }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                  {t('encryption.removeEncryption')}
-                </button>
-              ) : (
-                <button onClick={handleEncryptNote} className="w-full text-left text-xs rounded-md"
-                  style={{ color: 'var(--text-primary)', padding: '5px 12px' }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                  {t('encryption.encrypt')}
-                </button>
+              {!isPdfPath(contextMenu.note.path) && (
+                <>
+                  {contextMenu.note.is_encrypted ? (
+                    <button onClick={handleRemoveEncryption} className="w-full text-left text-xs rounded-md"
+                      style={{ color: 'var(--text-primary)', padding: '5px 12px' }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                      {t('encryption.removeEncryption')}
+                    </button>
+                  ) : (
+                    <button onClick={handleEncryptNote} className="w-full text-left text-xs rounded-md"
+                      style={{ color: 'var(--text-primary)', padding: '5px 12px' }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                      {t('encryption.encrypt')}
+                    </button>
+                  )}
+                  <div style={{ borderTop: '1px solid var(--border)', margin: '3px 0' }} />
+                </>
               )}
-              <div style={{ borderTop: '1px solid var(--border)', margin: '3px 0' }} />
               <button onClick={handleDeleteNote} className="w-full text-left text-xs rounded-md"
                 style={{ color: 'var(--danger-color)', padding: '5px 12px' }}
                 onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}

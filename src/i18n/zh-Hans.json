@@ -204,5 +204,21 @@
   },
   "tabMenu": {
     "copyPath": "复制路径"
+  },
+  "pdf": {
+    "loading": "正在加载 PDF…",
+    "loadFailed": "PDF 加载失败",
+    "passwordProtected": "该 PDF 受密码保护，暂不支持预览",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fitWidth": "适应宽度",
+    "pageInput": "页码",
+    "search": "在 PDF 中搜索",
+    "searchPlaceholder": "在 PDF 中搜索",
+    "searching": "搜索中…",
+    "noMatches": "无匹配",
+    "prevMatch": "上一个匹配",
+    "nextMatch": "下一个匹配",
+    "closeSearch": "关闭搜索"
   }
 }

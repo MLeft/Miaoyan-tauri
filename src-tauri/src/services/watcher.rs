@@ -25,7 +25,7 @@ fn is_note_file(pb: &Path) -> bool {
         return false;
     }
     let ext = pb.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-    matches!(ext.as_str(), "md" | "markdown" | "txt" | "html" | "htm") || name.ends_with(".md.encrypted")
+    matches!(ext.as_str(), "md" | "markdown" | "txt" | "html" | "htm" | "pdf") || name.ends_with(".md.encrypted")
 }
 
 /// 目录的普通 Modify 事件只代表「某个子项变了」——Windows 对目录内任意文件的
