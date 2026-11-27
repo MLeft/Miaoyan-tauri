@@ -77,6 +77,7 @@ try {
   const results = await evaluate("(async () => { const page = await import('/tests/pdf-lifecycle.browser.mjs'); const viewer = await import('/tests/pdf-viewer.browser.mjs'); const formatter = await import('/tests/formatter.browser.mjs'); const editor = await import('/tests/editor-revision.browser.mjs'); return [await page.testPdfPageLifecycle(), await page.testPdfPageLifecycle(5), await viewer.testPdfViewerFirstFrameAndRestore(), await formatter.testMarkdownFormatting(), await editor.testEditorRevision()]; })()");
   results.unshift(startupResult);
   results.push(await evaluate("import('/tests/app-shell.browser.mjs').then(test => test.testManualUpdateStartup(true))"));
+  results.push(await evaluate("import('/tests/app-shell.browser.mjs').then(test => test.testSearchKeepsFilterWhenOpeningPdf())"));
   results.push(await evaluate("import('/tests/library-scans.browser.mjs').then(test => test.testLibraryScanScopes())"));
   const press = async (key, code) => {
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode: code }, sessionId);

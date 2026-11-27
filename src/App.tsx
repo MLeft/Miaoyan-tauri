@@ -406,7 +406,10 @@ async function openExternalFile(rawPath: string) {
     if (!isCurrent() || !imported) return;
   }
   const storage = useSettingsStore.getState().config.storage_path;
-  await useNotesStore.getState().setActiveFolder(folder, storage, requestId);
+  const store = useNotesStore.getState();
+  // Revealing the folder replaces the tree; keep an active search instead of
+  // silently dropping it when a file is opened from outside the tree.
+  if (!store.searchQuery.trim()) await store.setActiveFolder(folder, storage, requestId);
 }
 
 export default function App() {
