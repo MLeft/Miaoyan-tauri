@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8"><title>MiaoYan browser regressions</title></head>
+  <body>
+    <button id="run-pdf">Run PDF lifecycle regression</button>
+    <pre id="results" role="status">Ready</pre>
+    <script type="module">
+      document.getElementById('run-pdf').addEventListener('click', async (event) => {
+        const { testPdfPageLifecycle } = await import('./pdf-lifecycle.browser.mjs');
+        event.target.disabled = true;
+        const results = document.getElementById('results');
+        results.textContent = 'Running';
+        try {
+          results.textContent = JSON.stringify(await testPdfPageLifecycle(), null, 2);
+        } catch (error) {
+          results.textContent = JSON.stringify({ passed: false, error: String(error) }, null, 2);
+        } finally {
+          event.target.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
