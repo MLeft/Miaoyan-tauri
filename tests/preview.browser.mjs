@@ -148,6 +148,13 @@ export async function runPreviewBrowser(send, sessionId, only) {
     await evaluate("window.__previewFixture.edit('<img onerror=alert(1)>unsafe')"); await pause(500);
     assert(!await frame("return !!document.querySelector('#write img')"), 'Sanitizer failure fell back to raw HTML');
   });
+  await run('body-font-loads-in-sandbox', async () => {
+    const font = await frame(`await document.fonts.load("16px 'TsangerJinKai02-W04'").catch(()=>{});
+      const face=[...document.fonts].find(f=>f.family.replace(/['"]/g,'')==='TsangerJinKai02-W04');
+      const css=[...document.styleSheets].flatMap(s=>{try{return [...s.cssRules]}catch{return []}}).map(r=>r.cssText).find(t=>t.includes('TsangerJinKai02-W04')&&t.includes('src'))||'';
+      return {chain:getComputedStyle(document.body).fontFamily.includes('TsangerJinKai02-W04'),status:face?face.status:'missing',inline:css.includes('data:font/woff2')}`);
+    assert(font.chain && font.status === 'loaded' && font.inline, `Preview body font missing or blocked in the sandbox: ${JSON.stringify(font)}`);
+  });
   await run('annotations-races-and-failure', async () => {
     await evaluate("window.__previewFixture.gates.set('C:/preview-fixture/slow.md', true); window.__previewFixture.select('C:/preview-fixture/slow.md','slow')");
     await evaluate("window.__previewFixture.select('C:/preview-fixture/b.md','new quote')"); await pause(500);
