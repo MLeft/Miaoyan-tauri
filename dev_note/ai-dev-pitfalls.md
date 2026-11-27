@@ -192,3 +192,16 @@
 - `read_annotations` 返回边车 `disk_version`（sha256，无文件为空串）；`write/delete_annotations` 必须携带 `expected_version`，不一致返回 `Conflict` 并保留磁盘内容
 - 前端 `Preview` 在读取时记录版本、每次成功写入后链式更新；保存失败后重试会先重新读取最新版本，避免死循环
 - 回归：`persistence_tests::annotation_writes_cas_against_external_sidecar_changes`（含加密变体，红绿验证过）
+
+---
+
+## 14. 沙箱预览 iframe 的字体被资源协议 CORS 拒绝
+
+**问题**：预览 iframe 加 `sandbox="allow-scripts"`（不透明源）后，安装版正文回退系统字体；开发模式与浏览器测试正常。
+
+**根因**：Web 字体按规范以 CORS 模式请求；不透明源发出 `Origin: null`。Tauri 2 资源协议的 `Access-Control-Allow-Origin` 只回「主窗口 Origin」（`tauri-2.x/src/protocol/asset.rs` 的 `window_origin`），因此字体被拒；Vite 开发服务器发 `*`，测试测不出来。
+
+**解决方案**：
+- 子集字体（430KB woff2）内联为 data URI 写进 `preview.html` 的 `@font-face`，无需跨源请求；源文件留在 `public/fonts/` 供重新生成
+- 回归用例 `tests/preview.browser.mjs` → `body-font-loads-in-sandbox`：在沙箱内断言 `document.fonts` 状态为 loaded 且 src 为 data URI
+- 一般原则：给预览 iframe 收紧沙箱时，逐一检查依赖 CORS 的子资源（字体、fetch/XHR）；no-cors 的 CSS/JS/图片不受影响
