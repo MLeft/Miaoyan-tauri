@@ -1028,8 +1028,8 @@ export function UnifiedTree() {
           e.dataTransfer.setData('application/note-path', note.path);
           e.dataTransfer.effectAllowed = 'move';
         }}
-        onClick={() => selectNote(note)}
-        onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, type: 'note', note }); }}
+        onClick={() => { useNotesStore.getState().setLastFolder(getParentPath(note.path)); selectNote(note); }}
+        onContextMenu={(e) => { e.preventDefault(); useNotesStore.getState().setLastFolder(getParentPath(note.path)); setContextMenu({ x: e.clientX, y: e.clientY, type: 'note', note }); }}
         onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
       >
@@ -1112,7 +1112,7 @@ export function UnifiedTree() {
       <div
         className="group flex items-center gap-1 cursor-pointer text-xs transition-colors"
         style={rowStyle(depth, isActive)}
-        onClick={() => toggleFolderExpand(project.path)}
+        onClick={() => { useNotesStore.getState().setLastFolder(project.path); toggleFolderExpand(project.path); }}
         onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (!isActive) e.currentTarget.style.backgroundColor = 'var(--accent-light)'; }}
         onDragLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
         onDrop={async (e) => {
@@ -1129,7 +1129,7 @@ export function UnifiedTree() {
             } catch (err) { console.error('Failed to move note:', err); }
           }
         }}
-        onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, type: 'folder', project }); }}
+        onContextMenu={(e) => { e.preventDefault(); useNotesStore.getState().setLastFolder(project.path); setContextMenu({ x: e.clientX, y: e.clientY, type: 'folder', project }); }}
         onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
         onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
       >

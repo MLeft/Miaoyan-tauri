@@ -79,6 +79,12 @@ try {
   results.push(await evaluate("import('/tests/app-shell.browser.mjs').then(test => test.testManualUpdateStartup(true))"));
   results.push(await evaluate("import('/tests/app-shell.browser.mjs').then(test => test.testSearchKeepsFilterWhenOpeningPdf())"));
   results.push(await evaluate("import('/tests/library-scans.browser.mjs').then(test => test.testLibraryScanScopes())"));
+  try {
+    await evaluate("import('/tests/sidebar-folders.browser.mjs').then(test => test.openNewSubfolderFixture())");
+    results.push(await evaluate("import('/tests/sidebar-folders.browser.mjs').then(test => test.createSubfolderUnderChild())"));
+  } finally {
+    await evaluate("window.__newSubfolder?.cleanup?.()");
+  }
   const press = async (key, code) => {
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode: code }, sessionId);
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: code }, sessionId);

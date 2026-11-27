@@ -169,6 +169,10 @@ interface NotesState {
   searchScope: 'content' | 'filename';
   searchType: SearchFileType;
   setSearchFilters: (filters: { scope?: 'content' | 'filename'; type?: SearchFileType }) => void;
+  lastFolder: string | null;
+  setLastFolder: (folder: string | null) => void;
+  /** Parent folder for shortcut-created notes/folders: last tree selection, else the active note's folder. */
+  creationParent: () => string;
   sortMode: SortMode;
   sortDirection: SortDirection;
   isLoading: boolean;
@@ -581,6 +585,7 @@ export const useNotesStore = create<NotesState>((set, get) => {
   searchError: null,
   searchScope: 'content',
   searchType: 'all',
+  lastFolder: null,
   sortMode: 'modified',
   sortDirection: 'desc',
   isLoading: false,
@@ -1027,6 +1032,24 @@ export const useNotesStore = create<NotesState>((set, get) => {
     set({ searchScope: scope, searchType: type });
     const query = get().searchQuery;
     if (query.trim()) void get().setSearchQuery(query, useSettingsStore.getState().config.storage_path);
+  },
+
+  setLastFolder: (folder) => {
+    if (get().lastFolder !== folder) set({ lastFolder: folder });
+  },
+
+  creationParent: () => {
+    const { storage_path, extra_folders } = useSettingsStore.getState().config;
+    const roots = [storage_path, ...(extra_folders || [])].filter(Boolean);
+    const usable = (path: string | null | undefined) => !!path && roots.some(root => pathIdentity(path) === pathIdentity(root) || isPathWithin(path, root));
+    const { lastFolder, activeFolder, activeNote } = get();
+    if (usable(lastFolder)) return lastFolder!;
+    if (activeFolder) return activeFolder;
+    if (activeNote) {
+      const separator = Math.max(activeNote.path.lastIndexOf('/'), activeNote.path.lastIndexOf('\\'));
+      if (separator > 0) return activeNote.path.slice(0, separator);
+    }
+    return storage_path || '';
   },
 
   setActiveFolder: async (folder, rootPath, requestId) => {

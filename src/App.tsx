@@ -526,9 +526,8 @@ function AppContent() {
   };
 
   const handleNewNote = async () => {
-    const { activeFolder, createDocument } = useNotesStore.getState();
-    const storagePath = useSettingsStore.getState().config.storage_path;
-    const folder = activeFolder || storagePath;
+    const { createDocument } = useNotesStore.getState();
+    const folder = useNotesStore.getState().creationParent();
     if (!folder) return;
     try {
       const created = await createDocument(folder, `Untitled-${Date.now()}`);
@@ -801,9 +800,7 @@ function AppContent() {
         e.preventDefault();
         const name = prompt('New folder name:');
         if (!name) return;
-        const storagePath = useSettingsStore.getState().config.storage_path;
-        const { activeFolder } = useNotesStore.getState();
-        const parent = activeFolder || storagePath;
+        const parent = useNotesStore.getState().creationParent();
         if (!parent) return;
         try {
           await useNotesStore.getState().withDocumentPathChange(`${parent}/${name}`, true, async () => {
