@@ -164,3 +164,31 @@
 - 回归测试：`services::watcher::tests::child_entry_changes_on_directory_are_not_structure_events`
 
 **验证**：真实运行时（CDP）外部新建/修改/改名/删除笔记与目录，`scan-notes` 计数保持不变；仅 App 启动的两次全扫计入。
+
+---
+
+## 12. 旧库扫描结果覆盖新库（扫描源无身份隔离）
+
+**问题**：A→B→A 切换笔记库后，旧库迟到的扫描回包/事件会覆盖或混入当前库，目录树短暂显示上个库的内容。
+
+**根因**：扫描请求没有身份标签；前端只按「最后一次请求」判断，无法区分同路径不同轮次的扫描，也无法拒绝已退役根的事件。
+
+**解决方案**：
+- 每次扫描携带 `scan_id + session_id + lane + generation`，Rust 侧 `ScanState` 按窗口/lane 保存代际，旧代际在启动前即被取消（协作式 `AtomicBool`）
+- 前端 `isCurrentScan(scan_id, domain, root, extras)` 同时校验事件标签、根集合与存储修订号；不匹配的分块/回包直接丢弃
+- 根切换时立即按当前根剪枝已加载数据，不等新扫描返回；测试覆盖 A/B/A、迟到回包、旧事件重放
+
+**案例**：`tests/scan-sources.test.mjs`、`tests/library-scans.browser.mjs`（`testLibraryScanScopes`）。
+
+---
+
+## 13. 批注边车被外部修改后静默覆盖
+
+**问题**：应用打开笔记期间，批注文件（`*.annotations.json`）被外部（同步工具/另一实例/git checkout）修改，应用内再保存批注会无提示覆盖外部内容。
+
+**根因**：批注读写只带文档身份（document_id），未带边车内容版本；watcher 不监听批注文件，前端也无从得知磁盘已变。
+
+**解决方案**：
+- `read_annotations` 返回边车 `disk_version`（sha256，无文件为空串）；`write/delete_annotations` 必须携带 `expected_version`，不一致返回 `Conflict` 并保留磁盘内容
+- 前端 `Preview` 在读取时记录版本、每次成功写入后链式更新；保存失败后重试会先重新读取最新版本，避免死循环
+- 回归：`persistence_tests::annotation_writes_cas_against_external_sidecar_changes`（含加密变体，红绿验证过）

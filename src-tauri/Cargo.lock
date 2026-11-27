@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "miaoyan"
-version = "1.0.42"
+version = "1.0.43"
 dependencies = [
  "aes-gcm",
  "argon2",
