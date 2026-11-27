@@ -205,3 +205,17 @@
 - 子集字体（430KB woff2）内联为 data URI 写进 `preview.html` 的 `@font-face`，无需跨源请求；源文件留在 `public/fonts/` 供重新生成
 - 回归用例 `tests/preview.browser.mjs` → `body-font-loads-in-sandbox`：在沙箱内断言 `document.fonts` 状态为 loaded 且 src 为 data URI
 - 一般原则：给预览 iframe 收紧沙箱时，逐一检查依赖 CORS 的子资源（字体、fetch/XHR）；no-cors 的 CSS/JS/图片不受影响
+
+---
+
+## 15. 外部根（extra_folders）的子目录被插到树顶层
+
+**问题**：在外部根（如 downloads）下新建子文件夹，磁盘正确，但树里显示在顶层，重载后才归位；普通子文件夹（如 tools）正常。前一轮已修过 `\?\` 扩展路径问题仍复现。
+
+**根因**：本地插入把「父目录是任意配置根」都当作「顶层插入」——存储根的子目录确实是顶层行，但外部根本身已是一个顶层节点，它的子目录必须挂到该节点的 children。扫描分块/迟到重插的同款判断也有此缺陷。
+
+**解决方案**：
+- 仅当父目录 == `storage_path` 时才插顶层；外部根的子目录走递归插入（会命中外部根节点自身）
+- `insertProjectNode`：仅当节点自身是配置根（或父是存储根）才放顶层
+- 回归：`tests/project-chunks.test.mjs`（外部根子目录、外部根自身）+ 浏览器 `sidebar-folders` 的 `createSubfolderUnderExtraRoot`
+- 判别技巧：让用户各建一个「普通子文件夹下」与「外部根下」的目录，出现差异即可锁定根类型（读 config.json 的 extra_folders 确认）
