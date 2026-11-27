@@ -519,7 +519,9 @@ export function UnifiedTree() {
     const parentPath = getParentPath(dirPath);
     const node: Project = { name: baseName(dirPath), path: dirPath, children: [], is_root: false };
     useNotesStore.setState(state => {
-      if (roots.some(r => normPath(r) === normPath(parentPath))) {
+      // Only the storage root itself hosts top-level rows. Children of an
+      // extra root belong under that root's node, which also sits on top.
+      if (normPath(parentPath) === normPath(cfg.storage_path)) {
         if (state.projects.some(p => normPath(p.path) === normPath(node.path))) return state;
         return { projects: sortProjects([...state.projects, node]) };
       }

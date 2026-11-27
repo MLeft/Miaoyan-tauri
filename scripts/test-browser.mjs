@@ -66,7 +66,7 @@ try {
     };
     socket.addEventListener('message', listener);
   });
-  await send('Page.navigate', { url: 'http://127.0.0.1:1420/tests/browser.html' }, sessionId);
+  await send('Page.navigate', { url: 'http://localhost:1420/tests/browser.html' }, sessionId);
   await loaded;
   const evaluate = async (expression) => {
     const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
@@ -82,6 +82,7 @@ try {
   try {
     await evaluate("import('/tests/sidebar-folders.browser.mjs').then(test => test.openNewSubfolderFixture())");
     results.push(await evaluate("import('/tests/sidebar-folders.browser.mjs').then(test => test.createSubfolderUnderChild())"));
+    results.push(await evaluate("import('/tests/sidebar-folders.browser.mjs').then(test => test.createSubfolderUnderExtraRoot())"));
   } finally {
     await evaluate("window.__newSubfolder?.cleanup?.()");
   }

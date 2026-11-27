@@ -55,7 +55,11 @@ const parentKeyOf = (p: string) => {
 /// 把晚到的目录节点插回扫描结果：顶层追加，嵌套按父路径递归插入
 function insertProjectNode(list: Project[], roots: string[], node: Project): Project[] {
   const parentKey = parentKeyOf(node.path);
-  if (roots.some((r) => projectKey(r) === parentKey)) {
+  const storageKey = roots.length ? projectKey(roots[0]) : '';
+  // A configured root (including extras) is a top-level row; everything else
+  // nests under its parent so extra-root children never leak to the top.
+  const isConfiguredRoot = roots.some((root) => projectKey(root) === projectKey(node.path));
+  if (isConfiguredRoot || (storageKey !== '' && parentKey === storageKey)) {
     if (list.some((p) => projectKey(p.path) === projectKey(node.path))) return list;
     return [...list, node];
   }

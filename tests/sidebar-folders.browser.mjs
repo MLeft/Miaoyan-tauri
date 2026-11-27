@@ -25,6 +25,7 @@ export async function openNewSubfolderFixture() {
   };
   const child = { name: 'Child', path: `${rootPath}/Parent/Child`, children: [], is_root: false };
   const parent = { name: 'Parent', path: `${rootPath}/Parent`, children: [child], is_root: false };
+  const extraRoot = { name: 'DownloadsRoot', path: 'C:/downloads-fixture', children: [], is_root: false };
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
@@ -41,7 +42,7 @@ export async function openNewSubfolderFixture() {
       if (command === 'start_scan_session') return 'browser-scan-session';
       if (['invalidate_scan', 'release_scan_lane', 'start_watching', 'write_log', 'write_logs'].includes(command)) return;
       if (command === 'get_all_notes') return [];
-      if (command === 'get_projects') return [parent];
+      if (command === 'get_projects') return [parent, extraRoot];
       if (command === 'create_folder') return `\\\\?\\${toWindows(args.parentPath)}\\${args.name}`;
       if (command === 'read_directory_snapshot') {
         const path = args.path;
@@ -53,8 +54,8 @@ export async function openNewSubfolderFixture() {
       throw new Error(`Unexpected subfolder command: ${command}`);
     },
   };
-  useSettingsStore.setState({ config: { ...settings.config, storage_path: rootPath, extra_folders: [], debug_log: false, language: 'en' }, loaded: true, loadError: null, draftConfig: null, saveError: null, saveStatus: 'idle' });
-  useNotesStore.setState({ projects: [parent], notes: [], activeFolder: null, expandedFolders: [parent.path, child.path], allNotesExpanded: true, searchQuery: '', searchResults: [] });
+  useSettingsStore.setState({ config: { ...settings.config, storage_path: rootPath, extra_folders: ['C:/downloads-fixture'], debug_log: false, language: 'en' }, loaded: true, loadError: null, draftConfig: null, saveError: null, saveStatus: 'idle' });
+  useNotesStore.setState({ projects: [parent, extraRoot], notes: [], activeFolder: null, expandedFolders: [parent.path, child.path], allNotesExpanded: true, searchQuery: '', searchResults: [] });
   const mount = document.createElement('div');
   mount.style.cssText = 'position:fixed;left:0;top:0;width:350px;height:650px';
   document.body.append(mount);
@@ -106,6 +107,34 @@ export async function createSubfolderUnderChild() {
       if (!nestedUnderChild()) throw new Error('Directory refresh moved the new folder out of its parent');
     }
     return { passed: true, parent: call.args.parentPath, insertedUnderParent: true, watcherRefreshKeepsNesting: true };
+  } finally {
+    window.prompt = previousPrompt;
+  }
+}
+export async function createSubfolderUnderExtraRoot() {
+  const f = window.__newSubfolder;
+  const row = [...f.mount.querySelectorAll('div')].find(element => element.textContent.trim().startsWith('DownloadsRoot') && element.className.includes('group'));
+  if (!row) throw new Error('Extra-root folder row missing');
+  row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }));
+  await until(() => f.mount.textContent.includes('New Subfolder'), 'Extra-root context menu did not open');
+  const item = [...f.mount.querySelectorAll('div')].find(element => element.textContent.trim() === 'New Subfolder');
+  const previousPrompt = window.prompt;
+  window.prompt = () => 'ExtraChild';
+  try {
+    item.click();
+    await until(() => f.calls.some(call => call.command === 'create_folder'), 'Extra-root create_folder was not invoked');
+    const call = f.calls.filter(call => call.command === 'create_folder').at(-1);
+    if (call.args.parentPath !== 'C:/downloads-fixture') throw new Error(`Extra-root subfolder used the wrong parent: ${call.args.parentPath}`);
+    await until(() => {
+      const projects = useNotesStore.getState().projects;
+      const root = projects.find(project => project.name === 'DownloadsRoot');
+      return !!root?.children.some(project => project.name === 'ExtraChild');
+    }, 'Extra-root child was not inserted beneath its root');
+    f.emitStructureCreate(`\\?\C:\downloads-fixture\ExtraChild`);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    const projects = useNotesStore.getState().projects;
+    if (projects.some(project => project.name === 'ExtraChild')) throw new Error('Extra-root child leaked to the top level');
+    return { passed: true, parent: call.args.parentPath, nestedUnderExtraRoot: true };
   } finally {
     window.prompt = previousPrompt;
   }

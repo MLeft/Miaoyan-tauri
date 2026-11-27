@@ -3,11 +3,11 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createTypeScriptLoader } from './helpers/load-typescript.mjs';
 
-function harness() {
+function harness(extraFolders = []) {
   const load = createTypeScriptLoader({ invoke: async () => undefined, setTimeout, clearTimeout, window: new EventTarget() });
   const { useNotesStore } = load(fileURLToPath(new URL('../src/stores/notes-store.ts', import.meta.url)));
   const { useSettingsStore } = load(fileURLToPath(new URL('../src/stores/settings-store.ts', import.meta.url)));
-  useSettingsStore.setState({ config: { ...useSettingsStore.getState().config, storage_path: 'C:/library', extra_folders: [] } });
+  useSettingsStore.setState({ config: { ...useSettingsStore.getState().config, storage_path: 'C:/library', extra_folders: extraFolders } });
   return useNotesStore;
 }
 
@@ -39,4 +39,23 @@ test('top-level chunks still append at the root and scanning shells stay non-des
   notes.getState().mergeProjectChunk({ ...project('Parent', 'C:/library/Parent'), scanning: true });
   assert.equal(notes.getState().projects[0].children.length, 1);
   assert.equal(notes.getState().projects[0].children[0].name, 'Child');
+});
+test('children of an extra root nest under that root instead of the top level', () => {
+  const notes = harness(['C:/library/Downloads']);
+  notes.setState({ projects: [project('Downloads', 'C:/library/Downloads'), project('Other', 'C:/library/Other')] });
+  notes.getState().mergeProjectChunk(project('Child', 'C:/library/Downloads/Child'));
+  const projects = notes.getState().projects;
+  assert.equal(projects.length, 2);
+  const downloads = projects.find(item => item.name === 'Downloads');
+  assert.equal(downloads.children.length, 1);
+  assert.equal(downloads.children[0].name, 'Child');
+});
+
+test('a discovered extra root itself still appends at the top level', () => {
+  const notes = harness(['C:/library/Nested/Extra']);
+  notes.setState({ projects: [project('Nested', 'C:/library/Nested')] });
+  notes.getState().mergeProjectChunk(project('Extra', 'C:/library/Nested/Extra'));
+  const projects = notes.getState().projects;
+  assert.equal(projects.length, 2);
+  assert.equal(projects[1].name, 'Extra');
 });
