@@ -616,3 +616,12 @@ fn folder_delete_retires_descendants_without_prefix_confusion() {
     fs::create_dir(a.parent().unwrap()).unwrap(); s.create_note(a.parent().unwrap(), "n").unwrap(); assert_ne!(s.resolve(&a).unwrap(), first);
     assert_eq!(fs::read_dir(f.0.join("trash")).unwrap().count(), 1);
 }
+
+#[test]
+fn created_folder_paths_stay_in_plain_spelling() {
+    let f = Fixture::new(); let s = f.service();
+    let parent = f.0.join("library");
+    let path = s.create_folder(&parent, "plain-child").unwrap();
+    assert!(path.ends_with("library\\plain-child"), "unexpected created path: {path}");
+    assert!(!path.contains(r"\\?\"), "extended-length prefix leaked into the payload: {path}");
+}

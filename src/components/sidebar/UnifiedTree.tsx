@@ -166,9 +166,14 @@ function stripKnownExt(title: string): string {
   return title.replace(/\.(md|markdown|txt)$/i, '');
 }
 
-/* ── 路径归一化：Windows 分隔符 / 大小写不敏感 ── */
-const normPath = (p: string) => p.replace(/\\/g, '/').toLowerCase();
-const slashPath = (p: string) => p.replace(/\\/g, '/');
+/* ── 路径归一化：Windows 分隔符 / 大小写不敏感 / 去扩展长度前缀 ── */
+const stripExtendedPath = (p: string) => p
+  .replace(/^\\\\\?\\UNC\\/i, '\\\\')
+  .replace(/^\\\\\?\\/i, '')
+  .replace(/^\/\/\?\/UNC\//i, '//')
+  .replace(/^\/\/\?\//i, '');
+const normPath = (p: string) => stripExtendedPath(p).replace(/\\/g, '/').toLowerCase();
+const slashPath = (p: string) => stripExtendedPath(p).replace(/\\/g, '/');
 const baseName = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
 const isUnderPath = (p: string, root: string) => {
   const np = normPath(p);
@@ -506,7 +511,8 @@ export function UnifiedTree() {
   }, []);
 
   /* ── 目录结构事件：本地增量增删换行，绝不触发整库重扫 ── */
-  const dirCreateLocal = useCallback((dirPath: string) => {
+  const dirCreateLocal = useCallback((rawPath: string) => {
+    const dirPath = stripExtendedPath(rawPath);
     const cfg = useSettingsStore.getState().config;
     const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean);
     if (!roots.some(r => isUnderPath(dirPath, r) && normPath(dirPath) !== normPath(r))) return;
@@ -638,7 +644,16 @@ export function UnifiedTree() {
         ]) }));
       } else {
         dirCreateLocal(path);
-        const replace = (items: Project[]): Project[] => items.map(item => normPath(item.path) === normPath(path) ? project : { ...item, children: replace(item.children) });
+        const replace = (items: Project[]): Project[] => {
+          let changed = false;
+          const next = items.map(item => {
+            if (normPath(item.path) === normPath(path)) { changed = true; return project; }
+            const children = replace(item.children);
+            if (children !== item.children) { changed = true; return { ...item, children }; }
+            return item;
+          });
+          return changed ? next : items;
+        };
         useNotesStore.setState(state => ({ projects: replace(state.projects) }));
       }
       const next = [...allNotesRef.current.filter(note => !isUnderPath(note.path, path)), ...notes];

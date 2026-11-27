@@ -155,7 +155,7 @@ function editorStateFixture(h, path) {
 function deleteEntry(h, directory = false) {
   const allNotesRef = { current: [...h.disk.keys()].map(note) };
   const tree = h.load.functions(source('components/sidebar/UnifiedTree.tsx'), [
-    'normPath', 'isUnderPath', 'projectTreeHas', 'removeNoteLocal', 'dirRemoveLocal', 'handleDeleteNote', 'handleDeleteFolder',
+    'stripExtendedPath', 'normPath', 'isUnderPath', 'projectTreeHas', 'removeNoteLocal', 'dirRemoveLocal', 'handleDeleteNote', 'handleDeleteFolder',
   ], { ...h.bindings, allNotesRef, setAllNotes: fn => { allNotesRef.current = fn(allNotesRef.current); }, setContextMenu() {},
     contextMenu: directory ? { type: 'folder', project: { path: 'C:/isolated' } } : { type: 'note', note: note(A) } });
   return directory ? tree.handleDeleteFolder : tree.handleDeleteNote;
@@ -843,7 +843,7 @@ function pathOperation(h, kind, folderPath = 'C:/isolated') {
     }).handleTitleCommit;
   }
   const tree = h.load.functions(source('components/sidebar/UnifiedTree.tsx'), [
-    'normPath', 'slashPath', 'baseName', 'isUnderPath', 'remapPath', 'projectTreeHas', 'dirRenameLocal', 'stripKnownExt',
+    'stripExtendedPath', 'normPath', 'slashPath', 'baseName', 'isUnderPath', 'remapPath', 'projectTreeHas', 'dirRenameLocal', 'stripKnownExt',
     'dirCreateLocal', 'sortProjects', 'getParentPath',
     'handleRenameNoteSubmit', 'handleRenameFolderSubmit', 'onDrop',
   ], bindings);

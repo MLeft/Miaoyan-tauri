@@ -982,7 +982,17 @@ impl Persistence {
 fn pin_paths(catalog: &Catalog) -> Vec<String> {
     catalog.documents.values().filter(|d| d.pinned).filter_map(|d| d.active_path.as_ref().map(|p| display(d.display_path.as_ref().unwrap_or(p)))).collect()
 }
-fn display(path: &Path) -> String { path.to_string_lossy().into_owned() }
+fn display(path: &Path) -> String {
+    // canonicalize() yields extended-length Windows paths; payloads and tree
+    // identity use the plain spelling so local inserts still match their parent.
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") { return format!(r"\\{rest}"); }
+        if let Some(rest) = text.strip_prefix(r"\\?\") { return rest.to_string(); }
+    }
+    text.into_owned()
+}
 fn digest(bytes: &[u8]) -> String { format!("{:x}", Sha256::digest(bytes)) }
 fn encrypted(path: &Path) -> bool { path.to_string_lossy().to_ascii_lowercase().ends_with(".encrypted") }
 fn ensure_plaintext(path: &Path) -> Result<()> {

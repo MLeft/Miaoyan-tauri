@@ -1192,13 +1192,25 @@ export const useNotesStore = create<NotesState>((set, get) => {
       .map(p => p.replace(/\\/g, '/').toLowerCase());
     if (!roots.some(r => pp === r || pp.startsWith(r + '/'))) return;
     set(s => {
-      const existing = s.projects.some(p => projectKey(p.path) === projectKey(project.path));
-      if (project.scanning && existing) return s;
-      return {
-        projects: existing
-          ? s.projects.map(p => (projectKey(p.path) === projectKey(project.path) ? project : p))
-          : [...s.projects, project],
+      // A chunk for a nested folder must land under its parent, never be
+      // appended at the top level just because only roots were inspected.
+      // Untouched siblings keep their identity so unrelated rows do not re-render.
+      const replace = (items: Project[]): Project[] => {
+        let changed = false;
+        const next = items.map(item => {
+          if (projectKey(item.path) === projectKey(project.path)) { changed = true; return project; }
+          const children = replace(item.children);
+          if (children !== item.children) { changed = true; return { ...item, children }; }
+          return item;
+        });
+        return changed ? next : items;
       };
+      const exists = (items: Project[]): boolean => items.some(item =>
+        projectKey(item.path) === projectKey(project.path) || exists(item.children));
+      if (project.scanning && exists(s.projects)) return s;
+      if (exists(s.projects)) return { projects: replace(s.projects) };
+      const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean);
+      return { projects: insertProjectNode(s.projects, roots, project) };
     });
   },
 
