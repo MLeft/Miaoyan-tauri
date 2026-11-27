@@ -2,6 +2,9 @@
   "app": {
     "name": "妙言",
     "loading": "載入中...",
+    "configLoadFailed": "設定讀取失敗",
+    "configPreserved": "原設定未被修改。請修復設定檔或存取權限後重試。",
+    "retryConfig": "重新讀取",
     "selectFolder": "選擇筆記資料夾",
     "subtitle": "輕量級 Markdown 編輯器"
   },
@@ -13,6 +16,9 @@
   "notesList": {
     "search": "搜尋...",
     "noResults": "無結果",
+    "searching": "正在搜尋文件內容…",
+    "searchFailed": "全文搜尋失敗，仍顯示檔案名稱與目錄的符合結果。",
+    "retrySearch": "重試搜尋",
     "noNotes": "暫無筆記",
     "empty": "暫無筆記",
     "notes": "篇筆記",
@@ -33,12 +39,37 @@
     "edit": "編輯",
     "split": "分割",
     "view": "預覽",
+    "toc": "目錄",
+    "presentation": "簡報",
     "settings": "設定",
     "export": "匯出",
     "format": "排版",
     "newNote": "新建筆記"
   },
+  "saveRecovery": {
+    "description": "儲存失敗，草稿已保留。儲存復原副本不會丟棄原文件草稿。",
+    "retry": "重試儲存",
+    "copy": "另存復原副本…",
+    "discard": "放棄草稿",
+    "discardWarning": "確認丟棄未儲存正文及待儲存的批註、圖片變更，並關閉此頁籤？磁碟檔案不會被修改。",
+    "changed": "文件已變更或仍有待完成操作，草稿已保留，請重試。"
+  },
+  "recovery": {
+    "title": "文件操作需要復原",
+    "description": "復原成功前，相關文件保持唯讀。",
+    "retry": "重試復原",
+    "working": "正在復原…",
+    "refresh": "重新整理狀態",
+    "details": "已保留的檔案路徑"
+  },
   "settings": {
+    "saving": "正在儲存…",
+    "saveFailed": "設定尚未儲存",
+    "retrySave": "重試",
+    "saveHint": "文字輸入按 Enter 或移出輸入框後儲存。",
+    "invalidValue": "請輸入有效的值。",
+    "close": "關閉設定",
+    "autoSaveHint": "設為 0 可關閉自動儲存。",
     "title": "設定",
     "general": "介面",
     "editor": "體驗",
@@ -72,6 +103,7 @@
     "fileAssociationHint": "註冊後右鍵選單出現 Open with MiaoYan；設為預設應用需在 Windows 設定中確認一次",
     "no": "否",
     "quickLaunch": "快捷喚起",
+    "recording": "錄製中...",
     "clear": "清除",
     "lineEnding": "行尾模式",
     "lineEndingLF": "妙言模式",
@@ -86,12 +118,14 @@
     "lineHeight": "行高",
     "imageUploadService": "圖片上傳服務",
     "imageUploadNone": "無（本地儲存）",
+    "debugLog": "偵錯日誌",
     "about": "關於"
   },
   "contextMenu": {
     "pin": "置頂",
     "unpin": "取消置頂",
     "rename": "重新命名",
+    "copyName": "複製檔案名稱",
     "copyPath": "複製檔案路徑",
     "delete": "刪除",
     "openInFinder": "在檔案管理員中顯示",
@@ -179,7 +213,9 @@
     "wrongPassword": "密碼錯誤",
     "success": "加密已展開",
     "removed": "加密已移除",
-    "mismatch": "兩次密碼不一致"
+    "mismatch": "兩次密碼不一致",
+    "failed": "文件未能儲存或正在操作，加密變更未執行。",
+    "scopeWarning": "僅保護正文、批註及本應用程式管理的歷史版本；引用的圖片、附件與外部備份不在加密範圍內。"
   },
   "toast": {
     "unsupportedFile": "不支援的檔案格式",
@@ -194,6 +230,7 @@
     "revealInFinder": "在 Finder 中顯示",
     "openInTerminal": "在終端機中打開",
     "delete": "刪除資料夾",
+    "copyName": "複製資料夾名稱",
     "copyPath": "複製資料夾路徑"
   },
   "tabMenu": {

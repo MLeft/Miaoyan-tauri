@@ -130,6 +130,8 @@ function getMermaidConfig(isDark = false) {
   };
   return {
     startOnLoad: false,
+    securityLevel: 'strict',
+    suppressErrorRendering: true,
     theme: isDark ? 'dark' : 'neutral',
     themeVariables: extendedColors,
     darkMode: isDark,
@@ -137,7 +139,7 @@ function getMermaidConfig(isDark = false) {
     fontFamily: "'TsangerJinKai02-W04', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif",
     flowchart: {
       useMaxWidth: true,
-      htmlLabels: true,
+      htmlLabels: false,
       curve: 'basis',
       nodeSpacing: 80,
       rankSpacing: 80,

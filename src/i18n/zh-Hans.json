@@ -2,6 +2,9 @@
   "app": {
     "name": "妙言",
     "loading": "加载中...",
+    "configLoadFailed": "配置读取失败",
+    "configPreserved": "原配置未被修改。请修复配置文件或访问权限后重试。",
+    "retryConfig": "重新读取",
     "selectFolder": "选择笔记文件夹",
     "subtitle": "轻量级 Markdown 编辑器"
   },
@@ -13,6 +16,9 @@
   "notesList": {
     "search": "搜索...",
     "noResults": "无结果",
+    "searching": "正在搜索文档内容…",
+    "searchFailed": "全文搜索失败，仍显示文件名和目录匹配结果。",
+    "retrySearch": "重试搜索",
     "noNotes": "暂无笔记",
     "empty": "暂无笔记",
     "notes": "篇笔记",
@@ -40,7 +46,30 @@
     "format": "排版",
     "newNote": "新建笔记"
   },
+  "saveRecovery": {
+    "description": "保存失败，草稿已保留。保存恢复副本不会丢弃原文档草稿。",
+    "retry": "重试保存",
+    "copy": "另存恢复副本…",
+    "discard": "放弃草稿",
+    "discardWarning": "确认丢弃未保存正文及待保存的批注、图片更改，并关闭此标签？磁盘文件不会被修改。",
+    "changed": "文档已改变或仍有待完成操作，草稿已保留，请重试。"
+  },
+  "recovery": {
+    "title": "文档操作需要恢复",
+    "description": "恢复成功前，相关文档保持只读。",
+    "retry": "重试恢复",
+    "working": "正在恢复…",
+    "refresh": "刷新状态",
+    "details": "已保留的文件路径"
+  },
   "settings": {
+    "saving": "正在保存…",
+    "saveFailed": "设置尚未保存",
+    "retrySave": "重试",
+    "saveHint": "文本输入按回车或移出输入框后保存。",
+    "invalidValue": "请输入有效的值。",
+    "close": "关闭设置",
+    "autoSaveHint": "设为 0 可关闭自动保存。",
     "title": "设置",
     "general": "界面",
     "editor": "体验",
@@ -184,7 +213,9 @@
     "wrongPassword": "密码错误",
     "success": "加密已应用",
     "removed": "加密已移除",
-    "mismatch": "两次密码不一致"
+    "mismatch": "两次密码不一致",
+    "failed": "文档未能保存或正在操作，加密变更未执行。",
+    "scopeWarning": "仅保护正文、批注和本应用管理的历史版本；引用的图片、附件及外部备份不在加密范围内。"
   },
   "toast": {
     "unsupportedFile": "不支持的文件格式",

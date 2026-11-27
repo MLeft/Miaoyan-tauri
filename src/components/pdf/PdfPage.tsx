@@ -4,6 +4,9 @@ import type { PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { computeHighlightRects } from './pdfText';
 import type { HighlightRect, PageText } from './pdfText';
 
+const MAX_CANVAS_PIXELS = 8_000_000;
+const MAX_CANVAS_DIMENSION = 8192;
+
 interface PdfPageProps {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -55,14 +58,19 @@ function PdfPageInner({
         const canvas = canvasRef.current;
         const ctx = canvas?.getContext('2d');
         if (!canvas || !ctx) return;
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
-        canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
+        const outputScale = Math.min(
+          window.devicePixelRatio || 1,
+          Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height)),
+          MAX_CANVAS_DIMENSION / viewport.width,
+          MAX_CANVAS_DIMENSION / viewport.height,
+        );
+        canvas.width = Math.max(1, Math.floor(viewport.width * outputScale));
+        canvas.height = Math.max(1, Math.floor(viewport.height * outputScale));
         renderTask = page.render({
           canvas,
           canvasContext: ctx,
           viewport,
-          transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+          transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined,
         });
         await renderTask.promise;
         if (cancelled) return;
@@ -97,6 +105,12 @@ function PdfPageInner({
       textLayer?.cancel();
       textLayerRef.current = null;
       textLayerContainerRef.current?.replaceChildren();
+      strsRef.current = [];
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
       setRects([]);
     };
   }, [visible, doc, pageNumber, scale, getPageText]);

@@ -126,6 +126,7 @@
 <link rel="stylesheet" href="/css/base.css">
 <link rel="stylesheet" href="/css/diagrams.css">
 
+<script defer src="/js/purify.min.js"></script>
 <script defer src="/js/highlight.min.js"></script>
 <script defer src="/js/emoji.min.js"></script>
 <script defer src="/js/lightense.min.js"></script>
@@ -154,13 +155,47 @@
 
 <script>
 /* ---- Bridge for parent frame ---- */
-var _pendingHtml = '';
-var _pendingDark = false;
-var _libsReady = false;
 var _domReady = false;
-var _rawMode = false; /* HTML 文件原始渲染模式：跳过 Markdown 后处理 */
-var _hasMath = false; /* 内容是否含数学符号：无则跳过 KaTeX 全文遍历 */
-var _tocTimer = null; /* tocbot 重建防抖计时器 */
+var _rawMode = false;
+var _hasMath = false;
+var _tocTimer = null;
+var _renderGeneration = 0;
+var _scope = null;
+var _port = null;
+var _fragment = new URLSearchParams(location.hash.slice(1));
+var _channel = _fragment.get('channel');
+var _parentOrigin = _fragment.get('parentOrigin');
+
+function sameScope(a, b) {
+  return !!a && !!b && a.path === b.path && a.identity === b.identity && a.revision === b.revision && a.generation === b.generation;
+}
+function validScope(s) {
+  return s && typeof s.path === 'string' && s.path.length < 32768 &&
+    ['identity', 'revision', 'generation'].every(function(k) { return Number.isSafeInteger(s[k]) && s[k] >= 0; });
+}
+window.PreviewBridge = {
+  send: function(data, scope) {
+    scope = scope || _scope;
+    if (_port && sameScope(scope, _scope)) _port.postMessage(Object.assign({}, data, { version: 1, channel: _channel, scope: scope }));
+  }
+};
+window.PreviewSafety = {
+  sanitize: function(html, svg) {
+    if (!window.DOMPurify || !DOMPurify.isSupported) throw new Error('DOMPurify unavailable');
+    return DOMPurify.sanitize(html, {
+      ADD_TAGS: svg ? ['style'] : [],
+      ALLOWED_URI_REGEXP: /^(?:(?:asset|https?|ftp|ftps|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+      FORBID_TAGS: ['script', 'iframe', 'frame', 'frameset', 'object', 'embed', 'base', 'meta', 'link', 'form'].concat(svg ? [] : ['style']),
+      FORBID_ATTR: ['srcdoc', 'target', 'formaction', 'action', 'autofocus'],
+      // DOM clobbering must not replace renderer roots, scripts or bridge globals.
+      SANITIZE_DOM: true
+    });
+  }
+};
+function sendPreviewError(error, scope) {
+  PreviewBridge.send({ type: 'preview-error', message: String(error && error.message || error).slice(0, 500) }, scope);
+}
+
 
 /* ── 按需加载重型库（mermaid/katex/markmap/plantuml 共约 3.9MB）──
    setContent 时按内容特征判断需要哪些库，动态注入脚本；
@@ -172,48 +207,64 @@ var LIB_SCRIPTS = {
   mermaid: ['/js/mermaid.min.js'],
   plantuml: ['/js/plantuml-encoder.min.js'],
   math: ['/js/katex.min.js', '/js/auto-render.min.js'],
-  markmap: ['/js/d3.min.js', '/js/markmap.min.js', '/js/markmap-view.min.js']
+  // Use the direct API, not the autoLoader (it injects additional scripts/timers).
+  markmap: ['/js/d3.min.js', '/js/markmap-view.min.js']
 };
 
 function libPresent(name) {
   if (name === 'mermaid') return !!window.mermaid;
   if (name === 'plantuml') return !!window.plantumlEncoder;
   if (name === 'math') return !!window.renderMathInElement;
-  if (name === 'markmap') return !!(window.markmap && window.markmap.autoLoader);
+  if (name === 'markmap') return !!(window.markmap && window.markmap.Markmap && window.markmap.Transformer);
   return true;
 }
 
 /* 按依赖顺序链式注入：前一个脚本 onload 后再注入下一个
    （markmap 依赖 d3，auto-render 依赖 katex，并行注入无法保证执行顺序） */
-function loadScriptChain(srcs, idx) {
-  if (idx >= srcs.length) return;
-  var s = document.createElement('script');
-  s.src = srcs[idx];
-  s.onload = function() { loadScriptChain(srcs, idx + 1); };
-  document.head.appendChild(s);
+var _scriptPromises = new Map();
+function loadScriptChain(srcs) {
+  return srcs.reduce(function(chain, src) {
+    return chain.then(function() {
+      if (_scriptPromises.has(src)) return _scriptPromises.get(src);
+      var promise = new Promise(function(resolve, reject) {
+        var s = document.createElement('script');
+        var timer = setTimeout(function() { finish(new Error('Library load timeout: ' + src)); }, 15000);
+        function finish(error) {
+          clearTimeout(timer); s.onload = s.onerror = null; s.remove();
+          if (error) reject(error); else resolve();
+        }
+        s.onload = function() { finish(); };
+        s.onerror = function() { finish(new Error('Library load failed: ' + src)); };
+        s.src = src;
+        document.head.appendChild(s);
+      });
+      _scriptPromises.set(src, promise);
+      promise.catch(function() { _scriptPromises.delete(src); });
+      return promise;
+    });
+  }, Promise.resolve());
 }
-
 function ensureLibs(names) {
-  names.forEach(function(name) {
-    _neededLibs[name] = true;
-    if (libPresent(name) || _loadingLibs[name]) return;
-    _loadingLibs[name] = true;
-    loadScriptChain(LIB_SCRIPTS[name], 0);
-  });
-}
-
-function neededLibsLoaded() {
-  for (var name in _neededLibs) {
-    if (_neededLibs[name] && !libPresent(name)) return false;
-  }
-  return true;
+  return Promise.all(names.map(function(name) {
+    if (libPresent(name)) return Promise.resolve();
+    if (!_loadingLibs[name]) {
+      _loadingLibs[name] = loadScriptChain(LIB_SCRIPTS[name]).then(function() {
+        if (!libPresent(name)) {
+          // onload alone is not success (e.g. an HTML fallback or broken bundle).
+          LIB_SCRIPTS[name].forEach(function(src) { _scriptPromises.delete(src); });
+          throw new Error('Library unavailable: ' + name);
+        }
+      }).catch(function(error) { delete _loadingLibs[name]; throw error; });
+    }
+    return _loadingLibs[name];
+  }));
 }
 
 /* 按内容特征判定需要哪些重型库（在 html 字符串上判断，零 DOM 开销） */
 function detectNeededLibs(html) {
   var names = [];
   if (html.indexOf('language-mermaid') !== -1) names.push('mermaid');
-  if (html.indexOf('language-plantuml') !== -1) names.push('plantuml');
+  // PlantUML encoder is loaded only after explicit per-diagram parent consent.
   if (html.indexOf('language-markmap') !== -1) names.push('markmap');
   if (_hasMath) names.push('math');
   return names;
@@ -240,30 +291,25 @@ function applyPreviewWidth(width) {
   }
 }
 
-function doRender() {
-  if (!window.MiaoYanCommon || !window.DiagramHandler) {
-    /* Defer scripts may not have executed yet, retry */
-    setTimeout(doRender, 100);
-    return;
+async function doRender(generation, scope) {
+  var current = function() { return generation === _renderGeneration && sameScope(scope, _scope); };
+  if (!current()) return;
+  if (!window.MiaoYanCommon || !window.DiagramHandler) throw new Error('Preview libraries unavailable');
+  if (!_rawMode) {
+    MiaoYanCommon.initializeCore();
+    MiaoYanCommon.setupInteractiveCheckboxes();
   }
-  /* 所需重型库尚未加载完成时延后：保证 mermaid/KaTeX 等后处理不因
-     动态注入的异步性而漏渲染 */
-  if (!neededLibsLoaded()) {
-    setTimeout(doRender, 50);
-    return;
-  }
-
-  MiaoYanCommon.initializeCore();
-  MiaoYanCommon.setupInteractiveCheckboxes();
   MiaoYanCommon.setupHeaderAnchors();
   MiaoYanCommon.setupFootnoteLinks();
   MiaoYanCommon.optimizeImages();
   MiaoYanCommon.setupImageZoom();
-  DiagramHandler.initializeAll();
+  if (!_rawMode) await DiagramHandler.initializeAll({ current: current, scope: scope });
+  if (!current()) return;
 
   if (window.renderMathInElement && _hasMath) {
     var write = document.getElementById('write');
     var renderMath = function() {
+      if (!current()) return;
       /* 只扫描 #write 而非 document.body，避免遍历 TOC 等外围 DOM */
       renderMathInElement(write, {
         delimiters: [
@@ -282,10 +328,10 @@ function doRender() {
       setTimeout(renderMath, 0);
     }
   }
-  window.parent.postMessage({ type: 'preview-rendered' }, '*');
+  PreviewBridge.send({ type: 'preview-rendered' }, scope);
   // Rebuild scroll anchors after all content (including diagrams/math) is ready
   if (window.__miaoyanSync) {
-    setTimeout(function() { window.__miaoyanSync.rebuild(); }, 150);
+    setTimeout(function() { if (current()) window.__miaoyanSync.rebuild(); }, 150);
   }
   // Refresh TOC to match new content (tab switch)
   // 防抖：打字触发的连续 setContent 只在停顿后重建一次 TOC
@@ -293,6 +339,7 @@ function doRender() {
     if (_tocTimer !== null) clearTimeout(_tocTimer);
     _tocTimer = setTimeout(function() {
       _tocTimer = null;
+      if (!current()) return;
       var tocHeadings = document.querySelectorAll('#write h1, #write h2, #write h3');
       var tocTrigger = document.querySelector('.toc-hover-trigger');
       try { tocbot.destroy(); } catch(e) {}
@@ -310,19 +357,28 @@ function doRender() {
           ignoreHiddenElements: true
         });
       } else {
-        if (tocTrigger) tocTrigger.style.display = 'none';
+        if (tocTrigger) { tocTrigger.style.display = 'none'; tocTrigger.classList.remove('hidden'); }
+        document.querySelector('.toc-nav').classList.remove('active');
       }
     }, 300);
   }
 }
 
 function setContent(html, isDark, previewWidth) {
-  _pendingDark = isDark;
+  var generation = ++_renderGeneration;
+  var scope = _scope;
+  _neededLibs = {};
+  if (_tocTimer !== null) { clearTimeout(_tocTimer); _tocTimer = null; }
+  window.dispatchEvent(new Event('preview-content-reset'));
+  window.DiagramHandler?.dispose();
+  window.MiaoYanCommon?._imageObserver?.disconnect();
   applyTheme(isDark);
   if (previewWidth) applyPreviewWidth(previewWidth);
 
   var write = document.getElementById('write');
-  if (!write) { _pendingHtml = html; return; }
+  if (!write) return;
+  try { html = PreviewSafety.sanitize(html); }
+  catch (error) { write.replaceChildren(); sendPreviewError(error, scope); return; }
 
   /* innerHTML 整段替换会销毁全部旧子节点：data-processed 标记、mermaid SVG、
      批注高亮都随 DOM 一起消失，无需逐一遍历清理。
@@ -343,35 +399,37 @@ function setContent(html, isDark, previewWidth) {
 
   /* WikiLinks：在字符串上预转换 [[title]] 为 span，
      避免先写 DOM 再读回 innerHTML 造成的二次全文序列化 */
-  if (!_rawMode && html.indexOf('[[') !== -1) {
-    html = html.replace(/\[\[([^\]]+)\]\]/g, '<span class="wikilink" data-title="$1">$1</span>');
-  }
-
   write.innerHTML = html;
-
-  /* 原始 HTML 模式：跳过 WikiLink/图表等 Markdown 专属后处理，保留批注模块可用 */
-  if (_rawMode) return;
-
-  /* 按内容特征注入所需重型库（无图表/数学公式的文档零加载） */
-  ensureLibs(detectNeededLibs(html));
-
-  /* WikiLinks 点击导航 */
-  write.querySelectorAll('.wikilink').forEach(function(el) {
-    el.addEventListener('click', function() {
-      window.parent.postMessage({ type: 'wikilink-navigate', title: el.dataset.title }, '*');
+  if (!_rawMode && html.indexOf('[[') !== -1) {
+    var walker = document.createTreeWalker(write, NodeFilter.SHOW_TEXT);
+    var texts = [];
+    while (walker.nextNode()) if (!walker.currentNode.parentElement.closest('pre,code')) texts.push(walker.currentNode);
+    texts.forEach(function(node) {
+      var text = node.textContent, pattern = /\[\[([^\]]+)\]\]/g, match, last = 0;
+      var fragment = document.createDocumentFragment();
+      while ((match = pattern.exec(text))) {
+        fragment.append(document.createTextNode(text.slice(last, match.index)));
+        var link = document.createElement('span'); link.className = 'wikilink';
+        link.dataset.title = match[1]; link.textContent = match[1]; fragment.append(link);
+        last = pattern.lastIndex;
+      }
+      if (last) { fragment.append(document.createTextNode(text.slice(last))); node.replaceWith(fragment); }
     });
+  }
+  write.querySelectorAll('.wikilink').forEach(function(el) {
+    el.addEventListener('click', function() { PreviewBridge.send({ type: 'wikilink-navigate', title: el.dataset.title }, scope); });
   });
-
-  doRender();
+  var needed = _rawMode ? [] : detectNeededLibs(html);
+  needed.forEach(function(name) { _neededLibs[name] = true; });
+  ensureLibs(needed).then(function() { return doRender(generation, scope); }).catch(function(error) {
+    if (generation === _renderGeneration) sendPreviewError(error, scope);
+  });
 }
 
 /* ---- DOMContentLoaded initialization (matches original flow) ---- */
 document.addEventListener('DOMContentLoaded', function() {
   _domReady = true;
-  /* If content was already sent, render it now */
-  if (_pendingHtml) {
-    setContent(_pendingHtml, _pendingDark);
-  }
+  // The parent only transfers its channel after iframe load (all defer scripts settled).
 });
 
 /* ---- Scroll sync (VS Code algorithm, same as original MiaoYan) ---- */
@@ -455,7 +513,7 @@ document.addEventListener('DOMContentLoaded', function() {
       var scrollY = window.pageYOffset || 0;
       var line = lineForScroll(scrollY);
       if (Math.abs(line - lastReportedLine) > 0.1) {
-        window.parent.postMessage({ type: 'previewScroll', line: line }, '*');
+        PreviewBridge.send({ type: 'previewScroll', line: line });
         lastReportedLine = line;
       }
     });
@@ -474,25 +532,54 @@ document.addEventListener('DOMContentLoaded', function() {
 })();
 
 window.addEventListener('message', function(e) {
-  if (!e.data) return;
-  if (e.data.type === 'setContent') {
-    _rawMode = !!e.data.raw;
-    if (_domReady) {
-      setContent(e.data.html, e.data.isDark, e.data.previewWidth);
-    } else {
-      _pendingHtml = e.data.html;
-      _pendingDark = e.data.isDark;
+  if (_port || !_domReady || e.source !== window.parent || e.origin !== _parentOrigin ||
+      !_channel || !/^[a-f0-9-]{36}$/.test(_channel) || e.data?.type !== 'preview-connect' || e.data.version !== 1 || e.ports.length !== 1) return;
+  _port = e.ports[0];
+  _port.onmessage = function(event) {
+    var data = event.data;
+    if (!data || data.version !== 1 || data.channel !== _channel || !validScope(data.scope)) return;
+    if (data.type === 'setContent') {
+      if (_scope && data.scope.generation <= _scope.generation) return;
+      if (typeof data.html !== 'string' || typeof data.raw !== 'boolean' || typeof data.isDark !== 'boolean' ||
+          !(data.previewWidth === 'full' || (Number.isFinite(Number(data.previewWidth)) && Number(data.previewWidth) > 0))) return;
+      _scope = data.scope; _rawMode = data.raw;
+      setContent(data.html, data.isDark, data.previewWidth);
+      return;
     }
-  } else if (e.data.type === 'applyTheme') {
-    applyTheme(e.data.isDark);
-  } else if (e.data.type === 'applyPreviewWidth') {
-    applyPreviewWidth(e.data.previewWidth);
-  } else if (e.data.type === 'scrollToLine') {
-    if (window.__miaoyanSync) window.__miaoyanSync.scrollToLine(e.data.line);
-  } else if (e.data.type === 'getHeadings') {
-    window.parent.postMessage({ type: 'headings', headings: getHeadings() }, '*');
-  }
+    if (!sameScope(_scope, data.scope)) return;
+    if (data.type === 'scrollToLine' && Number.isFinite(data.line) && data.line >= 0) window.__miaoyanSync?.scrollToLine(data.line);
+    else if (data.type === 'plantuml-approve' && typeof data.source === 'string' && data.source.length <= 100000 && Number.isSafeInteger(data.index) && data.index >= 0) {
+      var scope = _scope, generation = _renderGeneration;
+      var code = document.querySelectorAll('#write .language-plantuml')[data.index];
+      if (!code || code.textContent !== data.source || code.dataset.processed === 'true') return;
+      ensureLibs(['plantuml']).then(function() {
+        if (generation !== _renderGeneration || !sameScope(scope, _scope) || !code.isConnected || code.textContent !== data.source) return;
+        DiagramHandler.processPlantumlElement(code, { current: function() { return generation === _renderGeneration; }, scope: scope }, data.source);
+      }).catch(function(error) { sendPreviewError(error, scope); });
+    } else if (data.type === 'setAnnotationMode' && typeof data.enabled === 'boolean') {
+      window.dispatchEvent(new CustomEvent('preview-annotation-message', { detail: data }));
+    } else if (data.type === 'renderAnnotations' && Array.isArray(data.annotations) && data.annotations.every(function(a) {
+      return a && typeof a.id === 'string' && typeof a.quote === 'string' && ['open', 'resolved'].includes(a.status);
+    })) window.dispatchEvent(new CustomEvent('preview-annotation-message', { detail: data }));
+    else if (data.type === 'scrollToAnnotation' && typeof data.id === 'string') window.dispatchEvent(new CustomEvent('preview-annotation-message', { detail: data }));
+  };
+  _port.postMessage({ type: 'connected', version: 1, channel: _channel });
 });
+// All document links are mediated; renderer never navigates itself or opens a popup.
+function interceptLink(e) {
+  var link = e.target.closest && e.target.closest('a,area');
+  if (!link) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  var href = link.getAttribute('href') || link.getAttribute('xlink:href');
+  if (href && href[0] === '#') {
+    try { document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: 'smooth' }); } catch (_) {}
+  } else if (e.isTrusted && href) {
+    try { var url = new URL(href); if (['https:', 'http:', 'mailto:'].includes(url.protocol)) PreviewBridge.send({ type: 'open-link', url: url.href }); } catch (_) {}
+  }
+}
+document.addEventListener('click', interceptLink, true);
+document.addEventListener('auxclick', interceptLink, true);
+document.addEventListener('submit', function(e) { e.preventDefault(); }, true);
 
 function getHeadings() {
   var headings = [];
@@ -514,6 +601,7 @@ function getHeadings() {
 
   // Show floating action popup near selection
   function showSelectionPopup(text, heading, paragraphIndex, rect) {
+    var scope = _scope;
     dismissPopup();
     var popup = document.createElement('div');
     popup.className = 'ann-popup';
@@ -522,9 +610,7 @@ function getHeadings() {
     btnCopy.textContent = '复制';
     btnCopy.onclick = function(e) {
       e.stopPropagation();
-      navigator.clipboard.writeText(text).then(function() {
-        window.parent.postMessage({ type: 'annotation-copy' }, '*');
-      }).catch(function(){});
+      PreviewBridge.send({ type: 'annotation-copy', text: text }, scope);
       dismissPopup();
     };
 
@@ -532,13 +618,7 @@ function getHeadings() {
     btnAnnotate.textContent = '批注';
     btnAnnotate.onclick = function(e) {
       e.stopPropagation();
-      window.parent.postMessage({
-        type: 'annotation-selection',
-        quote: text,
-        heading: heading,
-        paragraphIndex: paragraphIndex,
-        rect: { top: rect.top, left: rect.left, bottom: rect.bottom }
-      }, '*');
+      PreviewBridge.send({ type: 'annotation-selection', quote: text, heading: heading, paragraphIndex: paragraphIndex }, scope);
       dismissPopup();
     };
 
@@ -599,6 +679,7 @@ function getHeadings() {
 
     var range = sel.getRangeAt(0);
     var anchor = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer;
+    if (!document.getElementById('write').contains(anchor)) return;
     var heading = findNearestHeading(anchor);
     var paragraphIndex = findParagraphIndex(anchor);
     var rect = range.getBoundingClientRect();
@@ -654,7 +735,7 @@ function getHeadings() {
           mark.dataset.annId = id;
           range.surroundContents(mark);
           mark.addEventListener('click', function() {
-            window.parent.postMessage({ type: 'annotation-click', id: id }, '*');
+            PreviewBridge.send({ type: 'annotation-click', id: id });
           });
         } catch(e) { /* skip if range crosses element boundaries */ }
         return;
@@ -663,16 +744,17 @@ function getHeadings() {
   }
 
   // Handle messages from parent
-  window.addEventListener('message', function(e) {
-    if (!e.data) return;
-    if (e.data.type === 'setAnnotationMode') {
-      annotationMode = e.data.enabled;
+  window.addEventListener('preview-content-reset', function() { dismissPopup(); window.getSelection()?.removeAllRanges(); });
+  window.addEventListener('preview-annotation-message', function(e) {
+    var data = e.detail;
+    if (data.type === 'setAnnotationMode') {
+      annotationMode = data.enabled;
       document.body.style.cursor = annotationMode ? 'text' : '';
       if (!annotationMode) dismissPopup();
-    } else if (e.data.type === 'renderAnnotations') {
-      highlightAnnotations(e.data.annotations);
-    } else if (e.data.type === 'scrollToAnnotation') {
-      var el = document.querySelector('[data-ann-id="' + e.data.id + '"]');
+    } else if (data.type === 'renderAnnotations') {
+      highlightAnnotations(data.annotations);
+    } else if (data.type === 'scrollToAnnotation') {
+      var el = Array.from(document.querySelectorAll('[data-ann-id]')).find(function(node) { return node.dataset.annId === data.id; });
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   });

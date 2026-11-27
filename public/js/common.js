@@ -75,7 +75,7 @@ const MiaoYanCommon = {
 
     const id = element.dataset.checkbox;
     // Notify parent frame (Tauri WebView) about checkbox toggle
-    window.parent.postMessage({ type: 'checkbox-toggle', index: id }, '*');
+    window.PreviewBridge?.send({ type: 'checkbox-toggle', index: Number(id) });
 
     const input = document.createElement('input');
     input.type = 'checkbox';
@@ -308,7 +308,9 @@ const MiaoYanCommon = {
         const replacedHTML = emoji.replace_colons(textNode.textContent);
         if (replacedHTML !== textNode.textContent) {
           const span = document.createElement('span');
-          span.innerHTML = replacedHTML;
+          // Emoji conversion can echo literal '<' from a text node as markup.
+          if (!window.PreviewSafety) return;
+          span.innerHTML = window.PreviewSafety.sanitize(replacedHTML);
           textNode.parentNode.replaceChild(span, textNode);
         }
       });
@@ -446,8 +448,9 @@ const TOC_CONFIG = {
     const headings = document.querySelectorAll('#write h1, #write h2, #write h3');
     if (headings.length < TOC_CONFIG.MIN_HEADINGS) {
       trigger.style.display = 'none';
-      return;
     }
+    if (nav.dataset.eventsBound === 'true') return;
+    nav.dataset.eventsBound = 'true';
 
     // Initialize tocbot (only show 3 levels: h1, h2, h3)
     if (window.tocbot) {
@@ -466,7 +469,9 @@ const TOC_CONFIG = {
 
     let fadeTimer = null;
     let scrollTimeout = null;
-    let isPinned = localStorage.getItem('toc-pinned') === 'true';
+    let isPinned = false;
+    // Opaque sandbox origins cannot access storage. Pinning still works in-session.
+    try { isPinned = localStorage.getItem('toc-pinned') === 'true'; } catch (_) {}
 
     const startAutoHideTimer = () => {
       if (isPinned) return;
@@ -482,6 +487,7 @@ const TOC_CONFIG = {
     };
 
     const show = () => {
+      if (document.querySelectorAll('#write h1, #write h2, #write h3').length < TOC_CONFIG.MIN_HEADINGS) return;
       nav.classList.add('active');
       trigger.classList.add('hidden');
       cancelAutoHideTimer();
@@ -520,7 +526,7 @@ const TOC_CONFIG = {
       pinBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         isPinned = !isPinned;
-        localStorage.setItem('toc-pinned', isPinned);
+        try { localStorage.setItem('toc-pinned', isPinned); } catch (_) {}
 
         if (isPinned) {
           nav.classList.add('pinned');
@@ -562,7 +568,7 @@ const TOC_CONFIG = {
     });
 
     const handleResize = () => {
-      trigger.style.display = window.innerWidth < TOC_CONFIG.MIN_SCREEN_WIDTH ? 'none' : '';
+      trigger.style.display = window.innerWidth < TOC_CONFIG.MIN_SCREEN_WIDTH || document.querySelectorAll('#write h1, #write h2, #write h3').length < TOC_CONFIG.MIN_HEADINGS ? 'none' : '';
       if (window.innerWidth < TOC_CONFIG.MIN_SCREEN_WIDTH) hide();
     };
     window.addEventListener('resize', handleResize);

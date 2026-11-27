@@ -159,7 +159,7 @@ function DragOverlayNoteItem({ note, formatDate }: { note: NoteMetadata; formatD
 export function NoteListPane() {
   const { t } = useTranslation();
   const {
-    notes, activeNote, activeFolder,
+    notes: libraryNotes, searchResults, activeNote, activeFolder,
     selectNote, searchQuery, setSearchQuery,
     sortMode, sortDirection, setSortMode, toggleSortDirection,
     isLoading, refreshNotes,
@@ -167,6 +167,7 @@ export function NoteListPane() {
     encryptionDialog, setEncryptionDialog, onNoteUnlocked,
   } = useNotesStore();
   const { config } = useSettingsStore();
+  const notes = searchQuery.trim() ? searchResults : libraryNotes;
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; note: NoteMetadata } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -514,9 +515,8 @@ export function NoteListPane() {
           notePath={encryptionDialog.notePath}
           visible={encryptionDialog.visible}
           onClose={() => setEncryptionDialog(null)}
-          onUnlocked={(content, password) => {
-            onNoteUnlocked(content, password);
-          }}
+          requestId={encryptionDialog.requestId}
+          onUnlocked={onNoteUnlocked}
           onEncrypted={() => refreshNotes(config.storage_path)}
           onRemoved={() => refreshNotes(config.storage_path)}
         />

@@ -1,13 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
 import { useTranslation } from 'react-i18next';
-import { encryptNote, decryptNote, saveEncryptedNote, removeEncryption } from '../../services/tauri-bridge';
+import { decryptNote, encryptNote } from '../../services/tauri-bridge';
+import { useNotesStore } from '../../stores/notes-store';
+import { useDialogFocus } from './useDialogFocus';
+import type { NoteContent } from '../../types';
 
 export interface EncryptionDialogProps {
   mode: 'unlock' | 'encrypt' | 'remove';
   notePath: string;
   visible: boolean;
   onClose: () => void;
-  onUnlocked?: (content: string, password: string) => void;
+  requestId?: number;
+  onUnlocked?: (notePath: string, snapshot: NoteContent, password: string, requestId: number) => boolean;
   onEncrypted?: () => void;
   onRemoved?: () => void;
 }
@@ -45,6 +49,7 @@ export function EncryptionDialog({
   mode,
   notePath,
   visible,
+  requestId,
   onClose,
   onUnlocked,
   onEncrypted,
@@ -57,22 +62,34 @@ export function EncryptionDialog({
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const passwordRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogId = useId();
+  const operation = useRef(0);
+  const submitting = useRef(false);
 
   useEffect(() => {
-    if (visible) {
-      setPassword('');
-      setConfirmPassword('');
-      setError('');
-      setShowPassword(false);
-      setShowConfirm(false);
-      setTimeout(() => passwordRef.current?.focus(), 50);
-    }
-  }, [visible]);
+    ++operation.current;
+    submitting.current = false;
+    setIsLoading(false);
+    setPassword('');
+    setConfirmPassword('');
+    setError('');
+    setShowPassword(false);
+    setShowConfirm(false);
+    return () => { ++operation.current; };
+  }, [visible, notePath, mode, requestId]);
+
+  const handleClose = () => {
+    if (submitting.current && mode !== 'unlock') return;
+    ++operation.current;
+    onClose();
+  };
+  const handleDialogKey = useDialogFocus(dialogRef, handleClose);
 
   if (!visible) return null;
 
   const handleSubmit = async () => {
+    if (submitting.current) return;
     setError('');
     if (!password) {
       setError(t('encryption.password'));
@@ -84,22 +101,29 @@ export function EncryptionDialog({
       return;
     }
 
+    submitting.current = true;
+    const generation = ++operation.current;
     setIsLoading(true);
     try {
       if (mode === 'unlock') {
-        const content = await decryptNote(notePath, password);
-        onUnlocked?.(content, password);
-        onClose();
-      } else if (mode === 'encrypt') {
-        await encryptNote(notePath, password);
-        onEncrypted?.();
-        onClose();
-      } else if (mode === 'remove') {
-        await removeEncryption(notePath, password);
-        onRemoved?.();
+        if (requestId === undefined) return;
+        let snapshot: NoteContent | null = null;
+        const accepted = await useNotesStore.getState().withDocumentPathChange(notePath, false, async () => {
+          await encryptNote(notePath, password);
+          snapshot = await decryptNote(notePath, password);
+        }, [], { preserveOpenRequest: requestId });
+        if (generation !== operation.current || !accepted || !snapshot) return;
+        onUnlocked?.(notePath, snapshot, password, requestId);
+      } else {
+        const changed = await useNotesStore.getState().changeDocumentEncryption(notePath, password, mode === 'encrypt');
+        if (generation !== operation.current) return;
+        if (!changed) { setError(useNotesStore.getState().getDocumentSession(notePath)?.saveError ?? t('encryption.failed')); return; }
+        if (mode === 'encrypt') onEncrypted?.();
+        else onRemoved?.();
         onClose();
       }
     } catch (e: unknown) {
+      if (generation !== operation.current) return;
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('Invalid password') || msg.includes('corrupted')) {
         setError(t('encryption.wrongPassword'));
@@ -107,13 +131,16 @@ export function EncryptionDialog({
         setError(msg);
       }
     } finally {
-      setIsLoading(false);
+      if (generation === operation.current) {
+        submitting.current = false;
+        setIsLoading(false);
+      }
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleSubmit();
-    if (e.key === 'Escape') onClose();
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); void handleSubmit(); }
   };
 
   const title =
@@ -127,9 +154,15 @@ export function EncryptionDialog({
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center dialog-overlay"
       style={{ backdropFilter: 'blur(8px)', backgroundColor: 'rgba(0,0,0,0.45)' }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={dialogId}
+        tabIndex={-1}
+        onKeyDown={handleDialogKey}
         className="rounded-2xl shadow-2xl p-6 w-[340px] dialog-content"
         style={{
           backgroundColor: 'var(--bg-secondary)',
@@ -141,20 +174,21 @@ export function EncryptionDialog({
           <span style={{ color: 'var(--accent)' }}>
             {mode === 'unlock' ? <IconUnlock /> : <IconLock />}
           </span>
-          <h2 className="mt-2 text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+          <h2 id={dialogId} className="mt-2 text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
             {title}
           </h2>
         </div>
 
         {/* Password field */}
         <div className="mb-3">
-          <label className="block text-xs mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+          <label htmlFor={`${dialogId}-password`} className="block text-xs mb-1.5" style={{ color: 'var(--text-secondary)' }}>
             {t('encryption.password')}
           </label>
           <div className="flex items-center rounded-lg px-3 py-2 gap-2"
             style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
             <input
-              ref={passwordRef}
+              id={`${dialogId}-password`}
+              disabled={isLoading}
               type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -176,12 +210,14 @@ export function EncryptionDialog({
         {/* Confirm password (encrypt mode only) */}
         {mode === 'encrypt' && (
           <div className="mb-3">
-            <label className="block text-xs mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+            <label htmlFor={`${dialogId}-confirm`} className="block text-xs mb-1.5" style={{ color: 'var(--text-secondary)' }}>
               {t('encryption.confirmPassword')}
             </label>
             <div className="flex items-center rounded-lg px-3 py-2 gap-2"
               style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
               <input
+                id={`${dialogId}-confirm`}
+                disabled={isLoading}
                 type={showConfirm ? 'text' : 'password'}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -202,15 +238,16 @@ export function EncryptionDialog({
         )}
 
         {/* Warning */}
-        {(mode === 'encrypt') && (
-          <p className="text-xs mb-3 px-1" style={{ color: 'var(--danger-color)' }}>
-            ⚠ {t('encryption.warning')}
-          </p>
+        {mode === 'encrypt' && (
+          <div className="text-xs mb-3 px-1 space-y-2">
+            <p style={{ color: 'var(--danger-color)' }}>{t('encryption.warning')}</p>
+            <p style={{ color: 'var(--text-secondary)' }}>{t('encryption.scopeWarning')}</p>
+          </div>
         )}
 
         {/* Error */}
         {error && (
-          <p className="text-xs mb-3 px-1" style={{ color: 'var(--danger-color)' }}>
+          <p role="alert" className="text-xs mb-3 px-1" style={{ color: 'var(--danger-color)' }}>
             {error}
           </p>
         )}
@@ -218,7 +255,8 @@ export function EncryptionDialog({
         {/* Buttons */}
         <div className="flex gap-2 mt-2">
           <button
-            onClick={onClose}
+            onClick={handleClose}
+            disabled={isLoading && mode !== 'unlock'}
             className="flex-1 py-2 rounded-lg text-sm transition-colors"
             style={{
               backgroundColor: 'var(--bg-tertiary)',

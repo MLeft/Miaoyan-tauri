@@ -1,275 +1,171 @@
-/**
- * Diagram Handler (Mermaid, PlantUML, Markmap)
- */
-
+/** Diagram jobs belong to one render; libraries are shared, DOM and consent are not. */
 const DiagramHandler = {
-  // Performance optimization: cache rendered diagram content hashes
-  _renderedHashes: new Map(),
+  _svgCache: new Map(),
+  _cacheChars: 0,
+  _mermaidQueue: Promise.resolve(),
+  _instances: new Set(),
+  _staging: new Set(),
+  _generation: 0,
 
-  createLoadingIndicator(diagramType) {
+  sanitize(svg) {
+    if (!window.PreviewSafety) throw new Error('Safe diagram renderer unavailable');
+    return window.PreviewSafety.sanitize(svg, true);
+  },
+  cacheSvg(key, svg) {
+    const cost = key.length + svg.length;
+    // Huge sources/results bypass cache, and both keys and values count in budget.
+    if (cost > 250000) return;
+    if (this._svgCache.has(key)) {
+      this._cacheChars -= key.length + this._svgCache.get(key).length;
+      this._svgCache.delete(key);
+    }
+    this._svgCache.set(key, svg); this._cacheChars += cost;
+    while (this._svgCache.size > 128 || this._cacheChars > 2000000) {
+      const first = this._svgCache.keys().next().value;
+      this._cacheChars -= first.length + this._svgCache.get(first).length;
+      this._svgCache.delete(first);
+    }
+  },
+  cachedSvg(key) {
+    const svg = this._svgCache.get(key);
+    if (svg !== undefined) { this._svgCache.delete(key); this._svgCache.set(key, svg); }
+    return svg;
+  },
+  dispose() {
+    ++this._generation;
+    this._instances.forEach(instance => instance.destroy?.());
+    this._instances.clear();
+    this._staging.forEach(node => node.remove());
+    this._staging.clear();
+  },
+  createLoadingIndicator(type) {
     const loader = document.createElement('div');
-    loader.className = 'diagram-loading';
-    loader.innerHTML = `<span style="opacity: 0.6; font-size: 12px;">Rendering ${diagramType}...</span>`;
-    loader.style.cssText = 'padding: 10px; text-align: center; color: var(--text-color);';
+    loader.className = 'diagram-loading'; loader.textContent = `Rendering ${type}...`;
+    loader.style.cssText = 'padding:10px;text-align:center;color:var(--text-color)';
     return loader;
   },
-
-  showError(loader, message) {
-    loader.innerHTML = `<span style="opacity: 0.5; font-size: 12px; color: #f44;">${message}</span>`;
-    setTimeout(() => loader.remove(), 2000);
+  showError(loader, message) { loader.textContent = message; loader.style.color = '#d33'; },
+  async initializeAll(context = {}) {
+    const generation = this._generation;
+    const job = { scope: context.scope, current: () => generation === this._generation && (!context.current || context.current()) };
+    window.ThemeConfig?.applyCSSVariables?.(this.isDarkMode());
+    this.initializePlantUML(job);
+    await Promise.all([this.initializeMermaid(job), this.initializeMarkmap(job)]);
+    if (job.current()) this.updateContainerStyles();
   },
-
-  initializeAll() {
-    const isDark = this.isDarkMode();
-
-    window.ThemeConfig?.applyCSSVariables?.(isDark);
-
-    this.initializeMermaid();
-    this.initializePlantUML();
-    this.initializeMarkmap();
-    this.updateContainerStyles();
-  },
-
-  // Simple hash function for content comparison
-  _simpleHash(str) {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      hash |= 0; // Convert to 32bit integer
-    }
-    return hash;
-  },
-
-  // Cache for SVG content to support zero-delay re-rendering
-  _svgCache: new Map(),
-
-  async initializeMermaid() {
+  async initializeMermaid(job = { current: () => true }) {
     if (!window.mermaid) return;
-
     const isDark = this.isDarkMode();
-    const config = window.ThemeConfig?.getMermaidConfig(isDark) || {};
-
-    mermaid.initialize(config);
-
-    const mermaidElements = document.querySelectorAll('.language-mermaid');
-
-    const renderPromises = Array.from(mermaidElements).map(async (element) => {
-      const content = element.textContent || '';
-      if (!content.trim()) return;
-
-      const hash = this._simpleHash(content);
-
-      // 1. Check Cache
-      if (this._svgCache.has(hash)) {
-        element.innerHTML = this._svgCache.get(hash);
-        element.dataset.mermaidRendered = 'true';
-        element.setAttribute('data-processed', 'true');
-        return;
+    const elements = document.querySelectorAll('#write .language-mermaid');
+    await Promise.all(Array.from(elements).map(element => {
+      if (element.dataset.processed === 'true') return;
+      const source = element.textContent || '';
+      if (!source.trim()) return;
+      const key = JSON.stringify([isDark, source]);
+      const cached = this.cachedSvg(key);
+      if (cached !== undefined && job.current()) {
+        element.innerHTML = this.sanitize(cached);
+        element.dataset.processed = 'true'; return;
       }
-
-      // 2. Render fresh
-      const elementId = 'mermaid-' + Math.random().toString(36).substr(2, 9);
-      const loader = this.createLoadingIndicator('Mermaid diagram');
-      element.parentNode.insertBefore(loader, element);
-
-      try {
-        const { svg } = await mermaid.render(elementId, content);
-        this._svgCache.set(hash, svg);
-        element.innerHTML = svg;
-        element.dataset.mermaidRendered = 'true';
-        element.setAttribute('data-processed', 'true');
-      } catch (error) {
-        console.error('Mermaid rendering failed:', error);
-        // Keep the original fenced-block source in place; do not inject verbose error HTML
-        // into the DOM (it leaks into PDF exports and prints).
-        element.dataset.mermaidRendered = 'failed';
-        element.setAttribute('data-processed', 'true');
-        const pre = element.closest('pre');
-        if (pre) {
-          pre.classList.add('mermaid-source-fallback');
-        }
-      } finally {
-        if (loader.parentNode) {
-          loader.remove();
-        }
-      }
-    });
-
-    await Promise.all(renderPromises);
+      // Mermaid configuration is global. Serialize initialize+render so a queued
+      // old-theme request cannot race another render's configuration.
+      const render = async () => {
+        if (!job.current() || !element.isConnected) return;
+        const loader = this.createLoadingIndicator('Mermaid');
+        element.before(loader);
+        const staging = document.createElement('div');
+        staging.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
+        document.body.append(staging); this._staging.add(staging);
+        try {
+          window.mermaid.initialize({ ...window.ThemeConfig?.getMermaidConfig(isDark), securityLevel: 'strict', startOnLoad: false, suppressErrorRendering: true });
+          const { svg } = await window.mermaid.render('mermaid-' + crypto.randomUUID(), source, staging);
+          if (!job.current() || !element.isConnected) return;
+          const safe = this.sanitize(svg);
+          this.cacheSvg(key, safe);
+          element.innerHTML = safe;
+          element.dataset.processed = 'true'; element.dataset.mermaidRendered = 'true';
+        } catch (error) {
+          if (job.current() && element.isConnected) {
+            element.dataset.mermaidRendered = 'failed';
+            element.closest('pre')?.classList.add('mermaid-source-fallback');
+            window.PreviewBridge?.send({ type: 'preview-error', message: 'Mermaid rendering failed' }, job.scope);
+          }
+        } finally { loader.remove(); staging.remove(); this._staging.delete(staging); }
+      };
+      this._mermaidQueue = this._mermaidQueue.then(render, render);
+      return this._mermaidQueue;
+    }));
   },
 
-  initializePlantUML(retryCount = 0) {
-    if (typeof window.plantumlEncoder === 'undefined') {
-      // 限制重试次数，避免 encoder 未加载时无限轮询
-      if (retryCount >= 10) {
-        console.warn('PlantUML encoder not available, skipping diagram rendering');
-        return;
-      }
-      console.warn('PlantUML encoder not loaded, retrying...');
-      setTimeout(() => this.initializePlantUML(retryCount + 1), 500);
-      return;
-    }
-
-    const plantumlElements = document.querySelectorAll('.language-plantuml');
-    plantumlElements.forEach(code => {
-      if (code.dataset.processed === 'true') return;
-      this.processPlantumlElement(code);
+  initializePlantUML(job = { current: () => true }) {
+    // No encoder loading, polling or network traffic before a parent UI approval.
+    document.querySelectorAll('#write .language-plantuml').forEach((code, index) => {
+      if (code.dataset.processed === 'true' || code.parentNode.querySelector('.plantuml-request')) return;
+      const source = code.textContent;
+      const button = document.createElement('button');
+      button.className = 'plantuml-request';
+      button.textContent = '请求在线渲染 PlantUML（将发送此图源码）';
+      button.addEventListener('click', () => {
+        if (job.current() && code.isConnected) window.PreviewBridge?.send({ type: 'plantuml-request', index, source }, job.scope);
+      });
+      code.before(button);
     });
   },
-
-  processPlantumlElement(code) {
-    const existingImage = code.parentNode.querySelector('.plantuml-image');
-    if (existingImage) existingImage.remove();
-
-    const existingLoader = code.parentNode.querySelector('.diagram-loading');
-    if (existingLoader) existingLoader.remove();
-
-    const loader = this.createLoadingIndicator('PlantUML diagram');
-    code.parentNode.insertBefore(loader, code);
-
-    const image = document.createElement('img');
-    image.className = 'plantuml-image';
-    image.loading = 'lazy';
-
-    // textContent 不触发强制布局，innerText 会强制同步计算渲染样式
-    let plantumlContent = code.textContent;
-    const isDark = this.isDarkMode();
-    const skinparams = window.ThemeConfig?.getPlantUMLSkinparams(isDark) || '';
-
-    // Strip existing skinparam directives before injecting the themed preset
-    plantumlContent = plantumlContent.replace(/skinparam\s+[^\n]*/g, '');
-    plantumlContent = skinparams + '\n' + plantumlContent;
-
-    image.src = 'https://www.plantuml.com/plantuml/svg/~1' + window.plantumlEncoder.encode(plantumlContent);
-
+  processPlantumlElement(code, job, authorizedSource) {
+    if (!job?.current() || !code.isConnected || code.textContent !== authorizedSource || code.dataset.processed === 'true' || !window.plantumlEncoder) return;
+    code.dataset.processed = 'true';
+    code.parentNode.querySelector('.plantuml-request')?.remove();
+    const loader = this.createLoadingIndicator('PlantUML'); code.before(loader);
+    const image = document.createElement('img'); image.className = 'plantuml-image';
+    image.referrerPolicy = 'no-referrer';
+    const themed = (window.ThemeConfig?.getPlantUMLSkinparams(this.isDarkMode()) || '') + '\n' + authorizedSource;
     image.onload = () => {
       loader.remove();
-      this.stylePlantumlImage(image, code, isDark);
+      if (!job.current() || !code.isConnected) { image.remove(); return; }
+      code.style.display = 'none'; image.style.cssText = 'display:block;max-width:100%;height:auto;margin:0 auto';
     };
-
     image.onerror = () => {
-      console.warn('PlantUML image failed to load, showing code block instead');
-      this.showError(loader, 'Failed to load diagram');
-      code.style.display = 'block';
-      image.style.display = 'none';
+      image.remove(); loader.remove();
+      if (!job.current() || !code.isConnected) return;
+      code.dataset.processed = 'false';
+      this.initializePlantUML(job);
+      window.PreviewBridge?.send({ type: 'preview-error', message: 'PlantUML request failed; request this diagram again to retry' }, job.scope);
     };
+    code.before(image);
+    // This is the only external PlantUML request site. Authorization is consumed
+    // for this code node, not stored by document, theme, source hash or session.
+    image.src = 'https://www.plantuml.com/plantuml/svg/~1' + window.plantumlEncoder.encode(themed);
+  },
 
-    code.parentNode.insertBefore(image, code);
-    code.style.display = 'none';
-
-    if (!code.dataset.originalContent) {
-      code.dataset.originalContent = code.textContent;
+  async initializeMarkmap(job = { current: () => true }) {
+    const elements = document.querySelectorAll('#write .language-markmap');
+    if (!elements.length) return;
+    if (!window.markmap?.Transformer || !window.markmap?.Markmap) throw new Error('Markmap unavailable');
+    for (const element of elements) {
+      if (!job.current() || !element.isConnected || element.dataset.markmapRendered === 'true') continue;
+      const transformer = new window.markmap.Transformer();
+      const { root } = transformer.transform(element.textContent);
+      // Do not call autoLoader/getAssets: document features must never inject JS.
+      // Sanitize every HTML label before D3/Markmap puts it into a foreignObject.
+      const clean = node => {
+        node.content = window.PreviewSafety.sanitize(node.content || '');
+        node.children?.forEach(clean);
+      };
+      clean(root);
+      if (!job.current()) return;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.style.cssText = 'width:100%;height:450px';
+      element.replaceChildren(svg);
+      const instance = window.markmap.Markmap.create(svg, { duration: 0, autoFit: true }, root);
+      this._instances.add(instance);
+      element.dataset.markmapRendered = 'true'; element.classList.add('markmap');
+      if (!job.current()) { instance.destroy?.(); this._instances.delete(instance); }
     }
-
-    code.dataset.processed = 'true';
   },
-
-  stylePlantumlImage(image, code, isDark) {
-    code.style.display = 'none';
-    image.style.display = 'block';
-    image.style.maxWidth = '100%';
-    image.style.width = 'auto';
-    image.style.height = 'auto';
-    image.style.margin = '0 auto';
-
-    if (image.parentNode) {
-      image.parentNode.classList.add('plantuml-container');
-    }
-  },
-
-  initializeMarkmap() {
-    const markMapElements = document.querySelectorAll('.language-markmap');
-    if (!markMapElements || markMapElements.length === 0) return;
-
-    markMapElements.forEach((element) => {
-      this.processMarkmapElement(element);
-    });
-
-    // Add delay to ensure DOM is fully ready
-    setTimeout(() => {
-      this.renderMarkmap();
-    }, 100);
-  },
-
-  processMarkmapElement(element) {
-    const isDark = this.isDarkMode();
-    const colorOptions = window.ThemeConfig?.getMarkmapColors(isDark) || {};
-
-    element.style.visibility = 'hidden';
-    element.style.overflow = 'visible';
-    element.style.minHeight = 'var(--markmap-height)';
-    element.style.height = 'var(--markmap-height)';
-    element.style.maxHeight = 'none';
-    element.style.pointerEvents = 'none';
-    element.style.textAlign = 'center';
-    element.style.lineHeight = '1';
-    element.style.boxSizing = 'border-box';
-
-    element.dataset.markmapColors = JSON.stringify(colorOptions);
-  },
-
-  renderMarkmap() {
-    if (!window.markmap?.autoLoader || typeof window.markmap.autoLoader.render !== 'function') {
-      setTimeout(() => this.renderMarkmap(), 100);
-      return;
-    }
-
-    const autoLoader = window.markmap.autoLoader;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const markMapElements = document.querySelectorAll('.language-markmap');
-        markMapElements.forEach((element) => {
-          if (element.dataset.markmapRendered === 'true' || element.querySelector('svg')) {
-            return;
-          }
-
-          const loader = this.createLoadingIndicator('Markmap');
-          element.parentNode.insertBefore(loader, element);
-
-          try {
-            autoLoader.render(element);
-            element.dataset.markmapRendered = 'true';
-            loader.remove();
-
-            // Set SVG height after rendering
-            setTimeout(() => {
-              const svg = element.querySelector('svg');
-              if (svg) {
-                const containerHeight = parseInt(element.style.height) || 450;
-                const svgHeight = Math.max(containerHeight - 16, 400);
-                svg.style.height = svgHeight + 'px';
-                svg.style.width = '100%';
-                svg.style.overflow = 'visible';
-
-                if (element.markmap && typeof element.markmap.fit === 'function') {
-                  element.markmap.fit();
-                }
-
-                element.classList.add('markmap');
-                element.style.visibility = 'visible';
-              }
-            }, 150);
-          } catch (error) {
-            console.error('Failed to render markmap block', error);
-            this.showError(loader, 'Failed to render Markmap');
-          }
-        });
-      });
-    });
-  },
-
   updateContainerStyles() {
-    // 旧实现对每个 pre 做三次子树查询；改为按类名直接选中再上溯到 pre，
-    // 每类最多一次查询，无图表文档零开销
-    document.querySelectorAll('.plantuml-image').forEach(el => {
-      el.closest('pre')?.classList.add('plantuml-image-container');
-    });
-    document.querySelectorAll('.language-mermaid').forEach(el => {
-      el.closest('pre')?.classList.add('mermaid-image-container');
-    });
-    document.querySelectorAll('.language-markmap').forEach(el => {
-      el.closest('pre')?.classList.add('markmap-image-container');
-    });
+    document.querySelectorAll('.plantuml-image').forEach(el => el.closest('pre')?.classList.add('plantuml-image-container'));
+    document.querySelectorAll('.language-mermaid').forEach(el => el.closest('pre')?.classList.add('mermaid-image-container'));
+    document.querySelectorAll('.language-markmap').forEach(el => el.closest('pre')?.classList.add('markmap-image-container'));
   },
 
   initializeMarkmapForPPT() {
@@ -334,11 +230,6 @@ const DiagramHandler = {
       }
     }, 10);
   },
-
-  isDarkMode() {
-    // Delegate to ThemeConfig for consistent dark mode detection
-    return window.ThemeConfig?.isDarkMode?.() || 'CUSTOM_CSS' === 'darkmode';
-  }
+  isDarkMode() { return window.ThemeConfig?.isDarkMode?.() || 'CUSTOM_CSS' === 'darkmode'; }
 };
-
 window.DiagramHandler = DiagramHandler;

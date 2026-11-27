@@ -10,6 +10,63 @@ export interface PageText {
   text: string;
 }
 
+interface CachedPageText {
+  promise: Promise<PageText>;
+  characters: number;
+}
+
+const MAX_CACHED_PAGES = 32;
+const MAX_CACHED_CHARACTERS = 2_000_000;
+
+export class PdfTextCache {
+  private entries = new Map<number, CachedPageText>();
+  private inFlight = new Map<number, Promise<PageText>>();
+  private characters = 0;
+
+  get(page: number, load: () => Promise<PageText>): Promise<PageText> {
+    const hit = this.entries.get(page);
+    if (hit) {
+      this.entries.delete(page);
+      this.entries.set(page, hit);
+      return hit.promise;
+    }
+    const pending = this.inFlight.get(page);
+    if (pending) return pending;
+    const entry: CachedPageText = { promise: Promise.resolve().then(load), characters: 0 };
+    entry.promise = entry.promise.then((value) => {
+      if (this.inFlight.get(page) === entry.promise) {
+        this.inFlight.delete(page);
+        if (value.text.length <= MAX_CACHED_CHARACTERS) {
+          entry.characters = value.text.length;
+          this.characters += entry.characters;
+          this.entries.set(page, entry);
+          this.evict();
+        }
+      }
+      return value;
+    }, (error) => {
+      if (this.inFlight.get(page) === entry.promise) this.inFlight.delete(page);
+      throw error;
+    });
+    this.inFlight.set(page, entry.promise);
+    return entry.promise;
+  }
+
+  clear() {
+    this.entries.clear();
+    this.inFlight.clear();
+    this.characters = 0;
+  }
+
+  private evict() {
+    while (this.entries.size > MAX_CACHED_PAGES || this.characters > MAX_CACHED_CHARACTERS) {
+      const [page, entry] = this.entries.entries().next().value!;
+      this.entries.delete(page);
+      this.characters -= entry.characters;
+    }
+  }
+}
+
 export interface SearchMatch {
   page: number;
   start: number;

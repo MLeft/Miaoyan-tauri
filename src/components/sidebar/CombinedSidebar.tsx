@@ -176,7 +176,7 @@ function DragOverlayNoteItem({ note, formatDate }: { note: NoteMetadata; formatD
 export function CombinedSidebar() {
   const { t } = useTranslation();
   const {
-    projects, notes, activeNote, activeFolder,
+    projects, notes: libraryNotes, searchResults, activeNote, activeFolder,
     selectNote, searchQuery, setSearchQuery,
     sortMode, sortDirection, setSortMode, toggleSortDirection,
     isLoading, refreshNotes, setActiveFolder, loadProjects,
@@ -184,6 +184,7 @@ export function CombinedSidebar() {
     encryptionDialog, setEncryptionDialog, onNoteUnlocked,
   } = useNotesStore();
   const { config } = useSettingsStore();
+  const notes = searchQuery.trim() ? searchResults : libraryNotes;
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; note: NoteMetadata } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -621,9 +622,8 @@ export function CombinedSidebar() {
           notePath={encryptionDialog.notePath}
           visible={encryptionDialog.visible}
           onClose={() => setEncryptionDialog(null)}
-          onUnlocked={(content, password) => {
-            onNoteUnlocked(content, password);
-          }}
+          requestId={encryptionDialog.requestId}
+          onUnlocked={onNoteUnlocked}
           onEncrypted={() => refreshNotes(config.storage_path)}
           onRemoved={() => refreshNotes(config.storage_path)}
         />

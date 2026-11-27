@@ -7,7 +7,7 @@ import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import { log } from '../../services/logger';
 import { PdfPage } from './PdfPage';
-import { buildPageText, findMatchesInText } from './pdfText';
+import { buildPageText, findMatchesInText, PdfTextCache } from './pdfText';
 import type { PageText, SearchMatch } from './pdfText';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -127,7 +127,7 @@ export function PdfViewer({ path }: PdfViewerProps) {
   const anchorPageRef = useRef<number | null>(null);
   // 卸载时 ref 可能已被 React 置空，滚动位置改为滚动中持续记录
   const lastScrollTopRef = useRef(0);
-  const textCacheRef = useRef(new Map<number, Promise<PageText>>());
+  const textCacheRef = useRef(new PdfTextCache());
   const searchSeqRef = useRef(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -154,19 +154,13 @@ export function PdfViewer({ path }: PdfViewerProps) {
     setPageInput(String(n));
   }, []);
 
-  const getPageText = useCallback(async (pageNumber: number): Promise<PageText> => {
-    const cache = textCacheRef.current;
-    const hit = cache.get(pageNumber);
-    if (hit) return hit;
-    const promise = (async () => {
-      const doc = docRef.current;
-      if (!doc) throw new Error('PDF not loaded');
+  const getPageText = useCallback((pageNumber: number): Promise<PageText> => {
+    const doc = docRef.current;
+    if (!doc) return Promise.reject(new Error('PDF not loaded'));
+    return textCacheRef.current.get(pageNumber, async () => {
       const page = await doc.getPage(pageNumber);
-      const content = await page.getTextContent();
-      return buildPageText(content);
-    })();
-    cache.set(pageNumber, promise);
-    return promise;
+      return buildPageText(await page.getTextContent());
+    });
   }, []);
 
   const registerRef = useCallback((pageNumber: number, el: HTMLDivElement | null) => {
@@ -197,7 +191,7 @@ export function PdfViewer({ path }: PdfViewerProps) {
     setSearching(false);
     dimsRef.current = [];
     pagesRef.current.clear();
-    textCacheRef.current = new Map();
+    textCacheRef.current.clear();
     searchSeqRef.current++;
 
     (async () => {
@@ -221,11 +215,12 @@ export function PdfViewer({ path }: PdfViewerProps) {
         setNumPages(doc.numPages);
 
         const firstPage = await doc.getPage(1);
+        if (cancelled) return;
         const firstViewport = firstPage.getViewport({ scale: 1 });
         const firstDim: PageDim = { width: firstViewport.width, height: firstViewport.height };
-        const arr: PageDim[] = new Array(doc.numPages);
-        arr[0] = firstDim;
+        const arr: PageDim[] = new Array(doc.numPages).fill(firstDim);
         dimsRef.current = arr;
+        setDims(arr);
 
         const container = containerRef.current;
         if (saved) {
@@ -277,6 +272,7 @@ export function PdfViewer({ path }: PdfViewerProps) {
         scrollTop: lastScrollTopRef.current,
       });
       docRef.current = null;
+      textCacheRef.current.clear();
       loadingTaskRef.current?.destroy();
       loadingTaskRef.current = null;
     };
@@ -284,15 +280,21 @@ export function PdfViewer({ path }: PdfViewerProps) {
 
   /* ── Restore scroll position once ready ── */
   useEffect(() => {
-    if (status !== 'ready' || restoredRef.current) return;
-    restoredRef.current = true;
+    if (status !== 'ready' || restoredRef.current || dims.length === 0) return;
     const info = restoreInfoRef.current;
-    if (!info?.scrollTop) return;
-    requestAnimationFrame(() => {
-      const c = containerRef.current;
-      if (c) c.scrollTop = info.scrollTop;
+    if (!info?.scrollTop) {
+      restoredRef.current = true;
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const container = containerRef.current;
+      if (!container) return;
+      container.scrollTop = info.scrollTop;
+      lastScrollTopRef.current = container.scrollTop;
+      restoredRef.current = true;
     });
-  }, [status, scale]);
+    return () => cancelAnimationFrame(frame);
+  }, [path, status, scale, dims]);
 
   /* ── Track current page while scrolling ── */
   const handleScroll = useCallback(() => {

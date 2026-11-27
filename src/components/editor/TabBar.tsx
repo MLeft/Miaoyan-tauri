@@ -41,6 +41,7 @@ function Tab({ tab, isActive, onSwitch, onClose, onContextMenu }: {
         borderRight: '1px solid var(--border)',
         maxWidth: '200px',
       }}
+      title={tab.saveError ? `保存失败，草稿已保留 / Save failed; draft retained: ${tab.saveError}` : tab.path}
       onClick={onSwitch}
       onMouseDown={(e) => {
         if (e.button === 1) {
@@ -63,7 +64,7 @@ function Tab({ tab, isActive, onSwitch, onClose, onContextMenu }: {
         style={{
           width: '18px',
           height: '18px',
-          color: tab.isDirty ? 'var(--accent-icon)' : 'var(--text-tertiary)',
+          color: tab.saveError ? 'var(--danger-color)' : tab.isDirty ? 'var(--accent-icon)' : 'var(--text-tertiary)',
           backgroundColor: hovered && !tab.isDirty ? 'var(--bg-tertiary)' : 'transparent',
           opacity: (isActive || hovered || tab.isDirty) ? 1 : 0,
         }}
@@ -71,7 +72,8 @@ function Tab({ tab, isActive, onSwitch, onClose, onContextMenu }: {
           e.stopPropagation();
           onClose();
         }}
-        title="Close"
+        title={tab.saveError ? '保存失败；点击重试保存并关闭 / Retry save and close' : tab.saveStatus === 'saving' ? '保存中 / Saving' : 'Close'}
+        aria-label={`Close ${tab.note.title}${tab.isDirty ? ' (unsaved)' : ''}`}
       >
         {tab.isDirty ? <IconModified /> : <IconClose />}
       </button>
@@ -159,7 +161,7 @@ function TabContextMenu({ menu, onClose, onAction }: {
 }
 
 export function TabBar() {
-  // 窄订阅：updateContent 已不再每键更新 openTabs，打字时标签栏不重渲染
+  // 窄订阅：只在结构/dirty/保存状态变化时更新，后续按键保持 openTabs 引用
   const { openTabs, activeTabPath, switchTab, closeTab, closeAllTabs, closeOtherTabs, closeLeftTabs, closeRightTabs } = useNotesStore(useShallow((s) => ({
     openTabs: s.openTabs,
     activeTabPath: s.activeTabPath,

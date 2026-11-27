@@ -2,6 +2,9 @@
   "app": {
     "name": "MiaoYan",
     "loading": "Loading...",
+    "configLoadFailed": "Configuration could not be loaded",
+    "configPreserved": "Your configuration has not been changed. Fix the file or access permissions, then retry.",
+    "retryConfig": "Retry loading",
     "selectFolder": "Select Notes Folder",
     "subtitle": "A lightweight Markdown editor"
   },
@@ -13,6 +16,9 @@
   "notesList": {
     "search": "Search...",
     "noResults": "No results",
+    "searching": "Searching document content…",
+    "searchFailed": "Full-text search failed. Filename and folder matches are still shown.",
+    "retrySearch": "Retry search",
     "noNotes": "No notes yet",
     "empty": "No notes yet",
     "notes": "notes",
@@ -40,7 +46,30 @@
     "format": "Format",
     "newNote": "New Note"
   },
+  "saveRecovery": {
+    "description": "Save failed; drafts are kept. A recovery copy does not discard the original draft.",
+    "retry": "Retry save",
+    "copy": "Save a copy…",
+    "discard": "Discard draft",
+    "discardWarning": "Discard unsaved text and pending annotation/image changes and close this tab? The disk file will not be changed.",
+    "changed": "The document changed or has pending work. The draft was kept; try again."
+  },
+  "recovery": {
+    "title": "Document recovery required",
+    "description": "Affected documents remain read-only until recovery succeeds.",
+    "retry": "Retry recovery",
+    "working": "Recovering...",
+    "refresh": "Refresh status",
+    "details": "Retained file paths"
+  },
   "settings": {
+    "saving": "Saving...",
+    "saveFailed": "Settings not saved",
+    "retrySave": "Retry",
+    "saveHint": "Text fields save on Enter or when you leave the field.",
+    "invalidValue": "Enter a valid value.",
+    "close": "Close settings",
+    "autoSaveHint": "0 disables automatic saving.",
     "title": "Settings",
     "general": "Interface",
     "editor": "Experience",
@@ -184,7 +213,9 @@
     "wrongPassword": "Incorrect password",
     "success": "Encryption applied",
     "removed": "Encryption removed",
-    "mismatch": "Passwords do not match"
+    "mismatch": "Passwords do not match",
+    "failed": "The document is unsaved or busy; encryption was not changed.",
+    "scopeWarning": "Protects the document, annotations, and app-managed history only. Linked images, attachments, and external backups are not encrypted."
   },
   "toast": {
     "unsupportedFile": "Unsupported file type",

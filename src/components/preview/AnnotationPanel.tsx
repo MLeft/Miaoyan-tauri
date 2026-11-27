@@ -45,11 +45,12 @@ const IconEdit = () => (
 interface AnnotationPanelProps {
   annotations: Annotation[];
   pendingSelection: PendingSelection | null;
-  onAdd: (comment: string) => void;
-  onDelete: (id: string) => void;
-  onResolve: (id: string) => void;
-  onReopen: (id: string) => void;
-  onEdit: (id: string, newComment: string) => void;
+  disabled: boolean;
+  onAdd: (comment: string) => Promise<boolean>;
+  onDelete: (id: string) => Promise<boolean>;
+  onResolve: (id: string) => Promise<boolean>;
+  onReopen: (id: string) => Promise<boolean>;
+  onEdit: (id: string, newComment: string) => Promise<boolean>;
   onCancelPending: () => void;
   onClearResolved: () => void;
   onScrollTo: (id: string) => void;
@@ -59,6 +60,7 @@ interface AnnotationPanelProps {
 
 export function AnnotationPanel({
   annotations,
+  disabled,
   pendingSelection,
   onAdd,
   onDelete,
@@ -86,10 +88,13 @@ export function AnnotationPanel({
     }
   }, [pendingSelection]);
 
-  const handleSubmit = () => {
-    if (!comment.trim()) return;
-    onAdd(comment.trim());
-    setComment('');
+  const handleSubmit = async () => {
+    if (disabled || !comment.trim()) return;
+    if (await onAdd(comment.trim())) setComment('');
+  };
+  const saveEdit = async (id: string) => {
+    if (disabled || !editText.trim()) return;
+    if (await onEdit(id, editText.trim())) setEditingId(null);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -145,6 +150,7 @@ export function AnnotationPanel({
         </div>
       </div>
 
+      <fieldset disabled={disabled} className="flex flex-col flex-1 min-h-0" style={{ border: 0, padding: 0, margin: 0 }}>
       {/* Pending selection input */}
       {pendingSelection && (
         <div className="shrink-0" style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)' }}>
@@ -253,7 +259,7 @@ export function AnnotationPanel({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
-                      if (editText.trim()) { onEdit(ann.id, editText.trim()); setEditingId(null); }
+                      void saveEdit(ann.id);
                     }
                     if (e.key === 'Escape') setEditingId(null);
                   }}
@@ -276,7 +282,7 @@ export function AnnotationPanel({
                     style={{ padding: '2px 8px', color: 'var(--text-secondary)' }}
                   >取消</button>
                   <button
-                    onClick={() => { if (editText.trim()) { onEdit(ann.id, editText.trim()); setEditingId(null); } }}
+                    onClick={() => { void saveEdit(ann.id); }}
                     className="text-xs rounded cursor-pointer"
                     style={{ padding: '2px 8px', backgroundColor: 'var(--accent-icon, #2b6cb0)', color: '#fff' }}
                   >保存</button>
@@ -355,6 +361,7 @@ export function AnnotationPanel({
           </button>
         </div>
       )}
+      </fieldset>
     </div>
   );
 }

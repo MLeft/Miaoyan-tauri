@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test tests/*.test.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -30,9 +31,8 @@
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-opener": "^2",
-    "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.1",
     "allotment": "^1.20.5",
+    "dompurify": "^3.5.0",
     "i18next": "^26.2.0",
     "pdfjs-dist": "^5.7.284",
     "prettier": "^3.8.3",

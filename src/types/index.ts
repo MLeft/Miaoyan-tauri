@@ -13,6 +13,7 @@ export interface NoteMetadata {
 export interface NoteContent {
   id: string;
   content: string;
+  disk_version: string;
 }
 
 export interface Project {
@@ -20,6 +21,8 @@ export interface Project {
   path: string;
   children: Project[];
   is_root: boolean;
+  /** Discovery-only chunk: never replace an existing subtree. */
+  scanning?: boolean;
 }
 
 export interface AppConfig {

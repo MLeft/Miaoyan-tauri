@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, lazy, Suspense } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { stat } from '@tauri-apps/plugin-fs';
@@ -6,10 +6,8 @@ import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
 import { Allotment } from 'allotment';
 import 'allotment/dist/style.css';
-import { Editor } from './components/editor/Editor';
 import { TabBar } from './components/editor/TabBar';
 import { Preview } from './components/preview/Preview';
-import { PdfViewer } from './components/pdf/PdfViewer';
 import { isPdfPath } from './utils/fileType';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { PresentationMode } from './components/presentation/PresentationMode';
@@ -17,21 +15,31 @@ import { TableOfContents } from './components/shared/TableOfContents';
 import { Backlinks } from './components/shared/Backlinks';
 import { ExportMenu } from './components/shared/ExportMenu';
 import { Toast, type ToastType } from './components/shared/Toast';
-import { UpdateDialog } from './components/shared/UpdateDialog';
+import { RecoveryBanner } from './components/shared/RecoveryBanner';
+import { SaveFailureBanner } from './components/shared/SaveFailureBanner';
+import type { OperationWarning } from './services/tauri-bridge';
 import { UnifiedTree } from './components/sidebar/UnifiedTree';
 import { formatMarkdown } from './services/formatter';
-import { createNote, createFolder, setAlwaysOnTop, writeNote, getPendingOpenFiles, scanFolder } from './services/tauri-bridge';
+import { createFolder, setAlwaysOnTop, getPendingOpenFiles, scanFolder, isCurrentScan, type ScanEvent } from './services/tauri-bridge';
 import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
-import { log } from './services/logger';
-import { useNotesStore } from './stores/notes-store';
+import { flushLogs, log } from './services/logger';
+import { createDocumentCloseHandler, useNotesStore } from './stores/notes-store';
 import { useSettingsStore } from './stores/settings-store';
 import { useEditorStore } from './stores/editor-store';
 import type { ViewMode } from './stores/editor-store';
 import { open } from '@tauri-apps/plugin-dialog';
-import { check } from '@tauri-apps/plugin-updater';
-import type { Update } from '@tauri-apps/plugin-updater';
-import { getVersion } from '@tauri-apps/api/app';
 import i18n from './i18n';
+
+const Editor = lazy(() => import('./components/editor/Editor').then(module => ({ default: module.Editor })));
+const PdfViewer = lazy(() => import('./components/pdf/PdfViewer').then(module => ({ default: module.PdfViewer })));
+
+const formatMessages: Record<string, { busy: string; done: string; changed: string; failed: string }> = {
+  en: { busy: 'Formatting', done: 'Formatting complete', changed: 'Document changed or is busy; formatting was not applied', failed: 'Formatting failed' },
+  'zh-Hans': { busy: '正在排版', done: '排版完成', changed: '文档已改变或正在操作，本次排版未应用', failed: '排版失败' },
+  'zh-Hant': { busy: '正在排版', done: '排版完成', changed: '文件已變更或正在操作，本次排版未套用', failed: '排版失敗' },
+  ja: { busy: '整形中', done: '整形が完了しました', changed: '文書が変更されたか処理中のため、整形を適用しませんでした', failed: '整形に失敗しました' },
+  es: { busy: 'Formateando', done: 'Formato completado', changed: 'El documento cambió o está ocupado; no se aplicó el formato', failed: 'Error de formato' },
+};
 
 /* ── Original MiaoYan SVG Icons (inline for currentColor theme support) ── */
 const IconSidebar = () => (
@@ -207,6 +215,7 @@ function Toolbar({ onOpenSettings, onTogglePresentation, onToggleExport, showExp
 }
 
 function EditorPane() {
+  const { t } = useTranslation();
   // 窄订阅：同上，避免 editorScrollLine 逐帧触发整个编辑区重渲染
   const viewMode = useEditorStore((s) => s.viewMode);
   const showToc = useEditorStore((s) => s.showToc);
@@ -243,8 +252,12 @@ function EditorPane() {
   return (
     <div className="h-full flex flex-col relative">
       <TabBar />
+      <SaveFailureBanner />
       <div className="flex-1 relative min-h-0 overflow-hidden">
-        {isPdfActive ? (
+        <Suspense fallback={<div role="status" className="h-full flex items-center justify-center" style={{ color: 'var(--text-secondary)' }}>{t('app.loading')}</div>}>
+        {!activeNote ? (
+          <div className="h-full flex items-center justify-center" style={{ color: 'var(--text-tertiary)' }}>{t('editor.selectNote')}</div>
+        ) : isPdfActive ? (
           <div className="h-full">
             <PdfViewer key={activeNote!.path} path={activeNote!.path} />
           </div>
@@ -266,6 +279,7 @@ function EditorPane() {
             <Editor />
           </div>
         )}
+        </Suspense>
         {showToc && !isPdfActive && <TableOfContents onNavigate={handleTocNavigate} onClose={toggleToc} />}
       </div>
       <Backlinks
@@ -279,7 +293,8 @@ function EditorPane() {
 }
 
 function WelcomeScreen() {
-  const { updateConfig } = useSettingsStore();
+  const { t } = useTranslation();
+  const { updateConfig, retrySave, saveStatus, saveError } = useSettingsStore();
 
   const handleSelectFolder = async () => {
     try {
@@ -299,13 +314,19 @@ function WelcomeScreen() {
         <p className="mb-6" style={{ color: 'var(--text-secondary)' }}>A lightweight Markdown editor</p>
         <button
           onClick={handleSelectFolder}
+          disabled={saveStatus === 'saving'}
           className="px-6 py-2 text-white rounded-lg transition-colors"
           style={{ backgroundColor: 'var(--accent)' }}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-hover)')}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent)')}
         >
-          Select Notes Folder
+          {saveStatus === 'saving' ? t('settings.saving') : t('app.selectFolder')}
         </button>
+        {saveError && <div role="alert" className="mt-4 max-w-lg space-y-2 text-sm" style={{ color: 'var(--text-primary)' }}>
+          <p>{t('settings.saveFailed')}</p>
+          <p className="break-all">{saveError}</p>
+          <button className="rounded border px-3 py-1" disabled={saveStatus === 'saving'} onClick={() => void retrySave()}>{t('settings.retrySave')}</button>
+        </div>}
       </div>
     </div>
   );
@@ -335,22 +356,38 @@ function isInsideLibrary(path: string): boolean {
 }
 
 // 把外部文件夹纳入文库：长驻进度 Toast + 实时显示已扫描文件数（Rust 单文件夹扫描每 200 个发一次事件）
-async function importExternalFolder(folder: string): Promise<boolean> {
+async function importExternalFolder(folder: string, isCurrent = () => true): Promise<boolean> {
+  if (!isCurrent()) return false;
   const cfg = useSettingsStore.getState().config;
   if (cfg.extra_folders.some(f => normPath(f) === normPath(folder))) return false;
+  const scanId = crypto.randomUUID();
   let unlisten: (() => void) | undefined;
   try {
-    unlisten = await listen<number>('miaoyan://scan-progress', (e) => {
-      showToastEvent(i18n.t('toast.importingProgress', { count: e.payload }), true);
+    unlisten = await listen<ScanEvent<number>>('miaoyan://scan-progress', (e) => {
+      const current = useSettingsStore.getState().config;
+      if (e.payload.scan_id === scanId && isCurrent() && isCurrentScan(scanId, 'progress', current.storage_path, current.extra_folders)) {
+        showToastEvent(i18n.t('toast.importingProgress', { count: e.payload.data }), true);
+      }
     });
   } catch { /* 监听失败仅退化为无计数 */ }
-  showToastEvent(i18n.t('toast.importingFolder'), true);
   try {
-    await useSettingsStore.getState().updateConfig({ extra_folders: [...cfg.extra_folders, folder] });
+    if (!isCurrent()) return false;
+    const settings = useSettingsStore.getState();
+    const current = settings.draftConfig ?? settings.config;
+    if (current.extra_folders.some(f => normPath(f) === normPath(folder))) return false;
+    showToastEvent(i18n.t('toast.importingFolder'), true);
+    const saved = await useSettingsStore.getState().updateConfig({ extra_folders: [...current.extra_folders, folder] });
+    if (!saved || !isCurrent()) return false;
     // 增量导入：只扫新文件夹（chunk 事件自动并入树），不重扫全库
-    await scanFolder(folder);
+    await scanFolder(folder, scanId);
+    const scope = useSettingsStore.getState().config;
+    if (!isCurrent() || !isCurrentScan(scanId, 'progress', scope.storage_path, scope.extra_folders)) return false;
     showToastEvent(i18n.t('toast.importDone'), false);
     return true;
+  } catch (error) {
+    const scope = useSettingsStore.getState().config;
+    if (!isCurrent() || !isCurrentScan(scanId, 'progress', scope.storage_path, scope.extra_folders)) return false;
+    throw error;
   } finally {
     unlisten?.();
   }
@@ -358,30 +395,52 @@ async function importExternalFolder(folder: string): Promise<boolean> {
 
 // 外部 .md 文件打开：已在树内的文件秒开（不重扫全库）；树外文件先秒开文件，再带进度导入父文件夹（复用拖拽逻辑）
 async function openExternalFile(rawPath: string) {
-  const path = normPath(rawPath); // 拖拽路径为反斜杠形式，先归一化再切分父目录
+  const path = rawPath.replace(/\\/g, '/'); // 保留实际文件名大小写，比较时才归一化
   const folder = path.substring(0, path.lastIndexOf('/'));
-  if (isInsideLibrary(path)) {
-    await useNotesStore.getState().openTemporaryFile(path);
-    useEditorStore.getState().setViewMode('preview'); // 外部打开以阅读为主，默认进预览视图
-    const storage = useSettingsStore.getState().config.storage_path;
-    useNotesStore.getState().setActiveFolder(folder, storage);
-    return;
+  const requestId = await useNotesStore.getState().openTemporaryFile(path, 'preview');
+  if (requestId === null) return;
+  const isCurrent = () => useNotesStore.getState().isCurrentOpen(requestId);
+  if (!isCurrent() || !folder) return;
+  if (!isInsideLibrary(path)) {
+    const imported = await importExternalFolder(folder, isCurrent);
+    if (!isCurrent() || !imported) return;
   }
-  await useNotesStore.getState().openTemporaryFile(path); // 先让用户看到文件，导入在其后执行
-  useEditorStore.getState().setViewMode('preview');
-  if (!folder) return;
-  const imported = await importExternalFolder(folder);
-  if (imported) {
-    const storage = useSettingsStore.getState().config.storage_path;
-    useNotesStore.getState().setActiveFolder(folder, storage);
-  }
+  const storage = useSettingsStore.getState().config.storage_path;
+  await useNotesStore.getState().setActiveFolder(folder, storage, requestId);
 }
 
 export default function App() {
   const { t } = useTranslation();
-  const { config, loaded, loadConfig } = useSettingsStore();
+  const { loaded, loadError, loadConfig } = useSettingsStore();
+  const [initialized, setInitialized] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    void loadConfig().then(() => { if (mounted) setInitialized(true); });
+    return () => { mounted = false; };
+  }, [loadConfig]);
+
+  if (!initialized || !loaded) {
+    return <div role="status" className="h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>{t('app.loading')}</div>;
+  }
+  if (loadError) {
+    return <div className="h-screen flex items-center justify-center p-8" style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+      <div role="alert" className="max-w-xl space-y-4">
+        <h1 className="text-lg font-medium">{t('app.configLoadFailed')}</h1>
+        <p>{t('app.configPreserved')}</p>
+        <p className="text-sm break-all" style={{ color: 'var(--text-secondary)' }}>{loadError}</p>
+        <button className="rounded px-4 py-2" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }} onClick={() => void loadConfig()}>{t('app.retryConfig')}</button>
+      </div>
+    </div>;
+  }
+  return <AppContent />;
+}
+
+function AppContent() {
+  const { t } = useTranslation();
+  const { config, loaded, storageRevision } = useSettingsStore();
   const loadProjects = useNotesStore((s) => s.loadProjects);
   const loadNotes = useNotesStore((s) => s.loadNotes);
+  const closing = useNotesStore((s) => s.closing);
   const [themeClass, setThemeClass] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showPresentation, setShowPresentation] = useState(false);
@@ -406,41 +465,71 @@ export default function App() {
     window.addEventListener('show-toast', handler);
     return () => window.removeEventListener('show-toast', handler);
   }, []);
-  const [showUpdate, setShowUpdate] = useState(false);
-  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
-  const [appVersion, setAppVersion] = useState('');
+  // Drain sessions before native destroy; errors (including ACL denial) retain
+  // the window. Never recursively call close() or bypass the native permissions.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const appWindow = getCurrentWindow();
+    const handleClose = createDocumentCloseHandler(async () => {
+      await flushLogs();
+      if (!disposed) await appWindow.destroy();
+    });
+    appWindow.onCloseRequested(event => {
+      if (disposed) { event.preventDefault(); return; }
+      return handleClose(event);
+    }).then(fn => {
+      if (disposed) fn();
+      else unlisten = fn;
+    }).catch(error => {
+      showToastEvent(`无法监听窗口关闭 / Close listener unavailable: ${String(error)}`, false, 'warning');
+    });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
 
-  const handleFormat = async () => {    const content = useNotesStore.getState().activeContent;
-    if (!content) return;
-    // HTML 文件不适用 Markdown 排版
-    const activeNote = useNotesStore.getState().activeNote;
-    if (activeNote && /\.(html|htm)$/i.test(activeNote.path)) return;
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<OperationWarning[]>('document-operation-warning', event => {
+      showToastEvent(event.payload.map(warning => `${warning.message}: ${warning.path}`).join('\n'), false, 'warning');
+      window.dispatchEvent(new CustomEvent('document-recovery-refresh'));
+    }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(console.error);
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+
+
+  const formatInFlight = useRef(new Set<number>());
+  const handleFormat = async () => {
+    const store = useNotesStore.getState();
+    const note = store.activeNote;
+    if (!note || isPdfPath(note.path) || /\.(html|htm)$/i.test(note.path)) return;
+    const session = store.getDocumentSession(note.path);
+    if (!session?.content || formatInFlight.current.has(session.identity)) return;
+    const messages = formatMessages[useSettingsStore.getState().config.language] ?? formatMessages.en;
+    formatInFlight.current.add(session.identity);
+    showToastEvent(`${messages.busy}: ${note.title}`, true);
     try {
-      const formatted = await formatMarkdown(content);
-      useNotesStore.getState().updateContent(formatted, '');
-      const lang = useSettingsStore.getState().config.language ?? '';
-      const msg = lang.startsWith('zh')
-        ? '自动化排版完成~'
-        : lang === 'ja'
-        ? '自動整形完了~'
-        : 'Auto formatting done~';
-      setToastMessage(msg);
-      setToastType('success');
-      setToastVisible(true);
-    } catch (err) {
-      console.error('Format failed:', err);
+      const formatted = await formatMarkdown(session.content);
+      if (!store.updateDocumentContent(note.path, formatted, session.revision)) {
+        showToastEvent(`${messages.changed}: ${note.title}`, false, 'warning');
+        return;
+      }
+      showToastEvent(`${messages.done}: ${note.title}`);
+    } catch (error) {
+      showToastEvent(`${messages.failed}: ${String(error)}`, false, 'warning');
+    } finally {
+      formatInFlight.current.delete(session.identity);
     }
   };
 
   const handleNewNote = async () => {
-    const { activeFolder, selectNote } = useNotesStore.getState();
+    const { activeFolder, createDocument } = useNotesStore.getState();
     const storagePath = useSettingsStore.getState().config.storage_path;
     const folder = activeFolder || storagePath;
     if (!folder) return;
     try {
-      const note = await createNote(folder, `Untitled-${Date.now()}`);
-      useNotesStore.getState().registerCreatedNote(note);
-      await selectNote(note);
+      const created = await createDocument(folder, `Untitled-${Date.now()}`);
+      if (!created || created.requestId === null || !useNotesStore.getState().isCurrentOpen(created.requestId)) return;
       // Enter inline rename on the new note once its row appears in the tree
       window.dispatchEvent(new CustomEvent('sidebar-rename-note'));
     } catch (e) { console.error('Failed to create note:', e); }
@@ -471,13 +560,8 @@ export default function App() {
           const content = params.get('content') || '';
           const folder = store.activeFolder || storagePath;
           if (folder) {
-            createNote(folder, newTitle).then(async (note) => {
-              if (content) {
-                await writeNote(note.path, content);
-              }
-              store.registerCreatedNote(note);
-              await store.selectNote(note);
-            }).catch(e => console.error('Deep-link: failed to create note:', e));
+            store.createDocument(folder, newTitle, content)
+              .catch(e => console.error('Deep-link: failed to create note:', e));
           }
           break;
         }
@@ -497,8 +581,6 @@ export default function App() {
       console.error('Failed to handle deep link:', e);
     }
   }
-
-  useEffect(() => { loadConfig(); }, []);
 
   // 清理 extra_folders 历史遗留的空字符串条目（旧版对反斜杠拖拽路径误写入 ''）
   useEffect(() => {
@@ -522,27 +604,6 @@ export default function App() {
       window.removeEventListener('resize', forceRepaint);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, []);
-
-  // Auto-check for updates after 3-second delay on startup
-  useEffect(() => {
-    getVersion().then((v) => setAppVersion(v)).catch(() => {});
-    const timer = setTimeout(async () => {
-      try {
-        const update = await check();
-        if (update) {
-          const skippedVersion = localStorage.getItem('skippedUpdateVersion');
-          if (skippedVersion !== update.version) {
-            setPendingUpdate(update);
-            setShowUpdate(true);
-          }
-        }
-      } catch (err) {
-        // Silently ignore update check failures (e.g. no network, dev mode)
-        console.warn('Update check failed:', err);
-      }
-    }, 3000);
-    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -570,7 +631,7 @@ export default function App() {
       loadProjects(config.storage_path);
       loadNotes(config.storage_path);
     }
-  }, [config.storage_path]);
+  }, [config.storage_path, storageRevision]);
 
   // Apply always_on_top on startup or config change
   useEffect(() => {
@@ -679,6 +740,7 @@ export default function App() {
 
   useEffect(() => {
     const handler = async (e: KeyboardEvent) => {
+      if (useNotesStore.getState().closing) { e.preventDefault(); return; }
       const mod = e.metaKey || e.ctrlKey;
       const pdfActivePath = useNotesStore.getState().activeNote?.path;
       const pdfActive = !!pdfActivePath && isPdfPath(pdfActivePath);
@@ -697,6 +759,11 @@ export default function App() {
       if (mod && e.key === 'l' && e.shiftKey) {
         e.preventDefault();
         if (!pdfActive) handleFormat();
+      }
+      // Cmd/Ctrl+S: explicitly retry/drain the active document's save queue.
+      if (mod && !e.shiftKey && e.key === 's') {
+        e.preventDefault();
+        void useNotesStore.getState().saveCurrentNote();
       }
       // Cmd+W: close active tab
       if (mod && !e.shiftKey && e.key === 'w') {
@@ -736,10 +803,11 @@ export default function App() {
         const parent = activeFolder || storagePath;
         if (!parent) return;
         try {
-          const newPath = await createFolder(parent, name);
-          // 本地插行，避免为新增一个空目录触发全库重扫
-          useNotesStore.getState().markRecentWrite(newPath);
-          window.dispatchEvent(new CustomEvent('folder-created', { detail: { path: newPath } }));
+          await useNotesStore.getState().withDocumentPathChange(`${parent}/${name}`, true, async () => {
+            const newPath = await createFolder(parent, name);
+            // 本地插行，避免为新增一个空目录触发全库重扫
+            window.dispatchEvent(new CustomEvent('folder-created', { detail: { path: newPath } }));
+          });
         } catch (err) { console.error('Failed to create folder:', err); }
       }
       // Cmd+R: rename active note
@@ -771,7 +839,7 @@ export default function App() {
   }
 
   return (
-    <div className={`h-screen flex flex-col ${themeClass}`} style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div inert={closing !== null} className={`h-screen flex flex-col ${themeClass}`} style={{ backgroundColor: 'var(--bg-primary)' }}>
       <Toolbar
         onOpenSettings={() => setShowSettings(true)}
         onTogglePresentation={() => setShowPresentation(true)}
@@ -780,6 +848,7 @@ export default function App() {
         onFormat={handleFormat}
         onNewNote={handleNewNote}
       />
+      <RecoveryBanner />
       <div className="flex-1 overflow-hidden relative">
         <Allotment>
           <Allotment.Pane minSize={160} preferredSize={220} maxSize={350} visible={config.show_sidebar}>
@@ -794,16 +863,6 @@ export default function App() {
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {showPresentation && <PresentationMode onClose={() => setShowPresentation(false)} />}
       <Toast message={toastMessage} visible={toastVisible} busy={toastBusy} type={toastType} onClose={() => setToastVisible(false)} />
-      <UpdateDialog
-        visible={showUpdate}
-        update={pendingUpdate}
-        currentVersion={appVersion}
-        onClose={() => setShowUpdate(false)}
-        onSkip={(version) => {
-          localStorage.setItem('skippedUpdateVersion', version);
-          setShowUpdate(false);
-        }}
-      />
     </div>
   );
 }

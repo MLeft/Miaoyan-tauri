@@ -11,7 +11,7 @@ export function VersionHistory({ onClose }: Props) {
   const { activeNote, selectNote } = useNotesStore();
   const [versions, setVersions] = useState<VersionEntry[]>([]);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
-  const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<VersionEntry | null>(null);
 
   useEffect(() => {
     if (!activeNote) return;
@@ -30,9 +30,9 @@ export function VersionHistory({ onClose }: Props) {
 
   const handlePreview = async (version: VersionEntry) => {
     if (!activeNote) return;
-    setSelectedVersion(version.filename);
+    setSelectedVersion(version);
     try {
-      const content = await getVersion(activeNote.path, version.filename);
+      const content = await getVersion(activeNote.path, version);
       setPreviewContent(content);
     } catch (e) {
       console.error('Failed to load version:', e);
@@ -93,11 +93,11 @@ export function VersionHistory({ onClose }: Props) {
                   className="w-full text-left px-4 py-2 text-xs btn-hover-transition"
                   style={{
                     borderBottom: '1px solid var(--border-light)',
-                    backgroundColor: selectedVersion === v.filename ? 'var(--accent-light)' : 'transparent',
+                    backgroundColor: selectedVersion?.filename === v.filename ? 'var(--accent-light)' : 'transparent',
                     color: 'var(--text-primary)',
                   }}
-                  onMouseEnter={(e) => { if (selectedVersion !== v.filename) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
-                  onMouseLeave={(e) => { if (selectedVersion !== v.filename) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                  onMouseEnter={(e) => { if (selectedVersion?.filename !== v.filename) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
+                  onMouseLeave={(e) => { if (selectedVersion?.filename !== v.filename) e.currentTarget.style.backgroundColor = 'transparent'; }}
                 >
                   <div style={{ color: 'var(--text-primary)' }}>{formatTimestamp(v.timestamp)}</div>
                   <div className="mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{(v.size / 1024).toFixed(1)} KB</div>

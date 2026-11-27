@@ -2,6 +2,9 @@
   "app": {
     "name": "MiaoYan",
     "loading": "読み込み中...",
+    "configLoadFailed": "設定を読み込めませんでした",
+    "configPreserved": "元の設定は変更されていません。設定ファイルまたはアクセス権を修正して再試行してください。",
+    "retryConfig": "再読み込み",
     "selectFolder": "ノートフォルダを選択",
     "subtitle": "軽量 Markdown エディタ"
   },
@@ -13,6 +16,9 @@
   "notesList": {
     "search": "検索...",
     "noResults": "結果なし",
+    "searching": "文書の内容を検索中…",
+    "searchFailed": "全文検索に失敗しました。ファイル名とフォルダーの一致は引き続き表示されます。",
+    "retrySearch": "検索を再試行",
     "noNotes": "ノートなし",
     "empty": "ノートなし",
     "notes": "件のノート",
@@ -33,12 +39,37 @@
     "edit": "編集",
     "split": "分割",
     "view": "プレビュー",
+    "toc": "目次",
+    "presentation": "プレゼンテーション",
     "settings": "設定",
     "export": "エクスポート",
     "format": "整形",
     "newNote": "新規ノート"
   },
+  "saveRecovery": {
+    "description": "保存に失敗しました。下書きは保持されています。コピーを保存しても元の下書きは破棄されません。",
+    "retry": "保存を再試行",
+    "copy": "復元用コピーを保存…",
+    "discard": "下書きを破棄",
+    "discardWarning": "未保存の本文と注釈・画像の変更を破棄して、このタブを閉じますか？ディスクのファイルは変更されません。",
+    "changed": "文書が変更されたか処理中です。下書きは保持されています。再試行してください。"
+  },
+  "recovery": {
+    "title": "文書の復旧が必要です",
+    "description": "復旧するまで関連文書は読み取り専用です。",
+    "retry": "復旧を再試行",
+    "working": "復旧中...",
+    "refresh": "状態を更新",
+    "details": "保持されたファイルのパス"
+  },
   "settings": {
+    "saving": "保存中...",
+    "saveFailed": "設定が保存されていません",
+    "retrySave": "再試行",
+    "saveHint": "テキストは Enter キーまたはフォーカスを外すと保存されます。",
+    "invalidValue": "有効な値を入力してください。",
+    "close": "設定を閉じる",
+    "autoSaveHint": "0 にすると自動保存を無効にします。",
     "title": "設定",
     "general": "インターフェース",
     "editor": "エクスペリエンス",
@@ -72,6 +103,7 @@
     "fileAssociationHint": "登録すると右クリックメニューに Open with MiaoYan が表示されます。既定のアプリにするには Windows の設定で一度確認が必要です。",
     "no": "いいえ",
     "quickLaunch": "クイック起動",
+    "recording": "録音中...",
     "clear": "クリア",
     "lineEnding": "改行コード",
     "lineEndingLF": "MiaoYan モード",
@@ -86,12 +118,14 @@
     "lineHeight": "行の高さ",
     "imageUploadService": "画像アップロードサービス",
     "imageUploadNone": "なし（ローカル保存）",
+    "debugLog": "デバッグログ",
     "about": "このアプリについて"
   },
   "contextMenu": {
     "pin": "ピン留め",
     "unpin": "ピン解除",
     "rename": "名前変更",
+    "copyName": "ファイル名をコピー",
     "copyPath": "ファイルパスをコピー",
     "delete": "削除",
     "openInFinder": "ファイルマネージャで表示",
@@ -179,7 +213,9 @@
     "wrongPassword": "パスワードが正しくありません",
     "success": "暗号化が適用されました",
     "removed": "暗号化が解除されました",
-    "mismatch": "パスワードが一致しません"
+    "mismatch": "パスワードが一致しません",
+    "failed": "文書が未保存または処理中のため、暗号化を変更しませんでした。",
+    "scopeWarning": "本文、注釈、アプリ管理の履歴のみを保護します。リンク先の画像、添付ファイル、外部バックアップは暗号化されません。"
   },
   "toast": {
     "unsupportedFile": "サポートされていないファイル形式",
@@ -194,6 +230,7 @@
     "revealInFinder": "Finder で表示",
     "openInTerminal": "ターミナルで開く",
     "delete": "フォルダを削除",
+    "copyName": "フォルダ名をコピー",
     "copyPath": "フォルダパスをコピー"
   },
   "tabMenu": {

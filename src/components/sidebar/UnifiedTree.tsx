@@ -3,19 +3,20 @@ import { useShallow } from 'zustand/react/shallow';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { listen } from '@tauri-apps/api/event';
 import type { Project, NoteMetadata } from '../../types';
-import { useNotesStore } from '../../stores/notes-store';
+import { documentRenameTarget, useNotesStore } from '../../stores/notes-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import {
-  createNote, deleteNote, renameNote,
-  createFolder, moveNote, renameFolder, deleteFolder,
+  renameNote,
+  createFolder, moveNote, renameFolder,
   revealInFinder, openInTerminal, getAllNotes, getNotesMetadata,
-  startWatching,
+  startWatching, readDirectorySnapshot, getScanId, isCurrentScan, scopeRootsOverlap, type ScanEvent,
 } from '../../services/tauri-bridge';
 import { useTranslation } from 'react-i18next';
 import { SyncStatusIndicator } from '../shared/SyncStatus';
 import { EncryptionDialog } from '../shared/EncryptionDialog';
 import { perfReport } from '../../services/perf';
 import { isPdfPath } from '../../utils/fileType';
+import { pathIdentity, isPathWithin } from '../../utils/path-identity';
 
 /* ── SVG Icons ── */
 const IconHome = () => (
@@ -218,15 +219,16 @@ export function UnifiedTree() {
     selectNote,
     isLoading, loadProjects,
     encryptionDialog, setEncryptionDialog, onNoteUnlocked,
-    expandedFolders, allNotesExpanded, searchQuery,
-    toggleExpandedFolder, setAllNotesExpanded, clearExpandedFolders,
+    expandedFolders, allNotesExpanded, searchQuery, searchResults, searchStatus, searchError, setSearchQuery,
+    toggleExpandedFolder, setAllNotesExpanded,
   } = useNotesStore(useShallow((s) => ({
     projects: s.projects, activeNote: s.activeNote,
     selectNote: s.selectNote,
     isLoading: s.isLoading, loadProjects: s.loadProjects,
     encryptionDialog: s.encryptionDialog, setEncryptionDialog: s.setEncryptionDialog, onNoteUnlocked: s.onNoteUnlocked,
     expandedFolders: s.expandedFolders, allNotesExpanded: s.allNotesExpanded, searchQuery: s.searchQuery,
-    toggleExpandedFolder: s.toggleExpandedFolder, setAllNotesExpanded: s.setAllNotesExpanded, clearExpandedFolders: s.clearExpandedFolders,
+    searchResults: s.searchResults, searchStatus: s.searchStatus, searchError: s.searchError, setSearchQuery: s.setSearchQuery,
+    toggleExpandedFolder: s.toggleExpandedFolder, setAllNotesExpanded: s.setAllNotesExpanded,
   })));
   const { config } = useSettingsStore();
 
@@ -247,8 +249,12 @@ export function UnifiedTree() {
   const [renamingFolderPath, setRenamingFolderPath] = useState<string | null>(null);
   const [renameFolderValue, setRenameFolderValue] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
-  // 本地搜索输入：纯前端标题过滤，避免每次按键触发 Rust 全文扫描
-  const [searchInput, setSearchInput] = useState('');
+  const searchInput = searchQuery;
+  const setSearchInput = (query: string) => { void setSearchQuery(query, config.storage_path); };
+  useEffect(() => {
+    const query = useNotesStore.getState().searchQuery;
+    if (query.trim()) void setSearchQuery(query, config.storage_path);
+  }, [config.storage_path, config.extra_folders, setSearchQuery]);
 
   /* ── Local cache of ALL notes (not filtered by active folder) ── */
   const [allNotes, setAllNotes] = useState<NoteMetadata[]>([]);
@@ -258,35 +264,43 @@ export function UnifiedTree() {
   /* ── 渐进加载进度：扫描期间「全部笔记」右侧显示 已加载/总数，完成后只显示总数 ──
      总数优先用上次会话持久值（启动即可显示分数），Rust scan-total 事件到达后校正 ── */
   const [scanning, setScanning] = useState(false);
+  const fullLoadGeneration = useRef(0);
+  const libraryMounted = useRef(true);
+  const storageRevision = useSettingsStore(s => s.storageRevision);
+  const savingSettings = useSettingsStore(s => s.saveStatus === 'saving');
   const [scanTotal, setScanTotal] = useState(() => {
     try { return Number(localStorage.getItem('miaoyan.scanTotal')) || 0; } catch { return 0; }
   });
 
   const reloadAllNotes = useCallback(async () => {
+    if (!libraryMounted.current) return;
+    const generation = ++fullLoadGeneration.current;
+    const { config: cfg, storageRevision: revision } = useSettingsStore.getState();
+    const pending = getAllNotes(cfg.storage_path, cfg.extra_folders);
+    const scanId = getScanId(pending);
+    const isCurrent = () => {
+      const current = useSettingsStore.getState();
+      return libraryMounted.current && generation === fullLoadGeneration.current && revision === current.storageRevision && isCurrentScan(scanId, 'notes', current.config.storage_path, current.config.extra_folders);
+    };
     setScanning(true);
     try {
-      const cfg = useSettingsStore.getState().config;
       const callFolders = (cfg.extra_folders || []).map(p => p.replace(/\\/g, '/').toLowerCase());
       // 扫描开始时的既有路径：用于识别扫描期间本地增量新增的行
       const beforePaths = new Set(allNotesRef.current.map(n => normPath(n.path)));
       const t0 = performance.now();
-      const loaded = await getAllNotes(cfg.storage_path, cfg.extra_folders || []);
+      const loaded = await pending;
+      if (!isCurrent()) return;
       // 启动/全量刷新链路：目录扫描超过 200ms 记录
       const dt = performance.now() - t0;
       if (dt > 200) perfReport('scan-notes', dt, `count=${loaded.length}`);
       // 迟到保护：扫描期间配置变更时，权威结果须按当前配置裁剪——
       // 新增文件夹的增量行按前缀保留（避免计数跌落），已移除文件夹的笔记过滤（避免移除行复活）
-      const now = useSettingsStore.getState().config.extra_folders || [];
+      const current = useSettingsStore.getState().config;
+      const now = current.extra_folders;
       const nowNorm = now.map(p => p.replace(/\\/g, '/').toLowerCase());
       const added = nowNorm.filter(f => !callFolders.includes(f));
-      const removed = callFolders.filter(f => !nowNorm.includes(f));
-      let merged = loaded;
-      if (removed.length > 0) {
-        merged = merged.filter(n => {
-          const np = n.path.replace(/\\/g, '/').toLowerCase();
-          return !removed.some(r => np === r || np.startsWith(r + '/'));
-        });
-      }
+      const roots = [current.storage_path, ...now].filter(Boolean);
+      let merged = loaded.filter(note => roots.some(root => isPathWithin(note.path, root)));
       if (added.length > 0) {
         const have = new Set(merged.map(n => n.path.replace(/\\/g, '/').toLowerCase()));
         const keep = allNotesRef.current.filter(n => {
@@ -301,7 +315,7 @@ export function UnifiedTree() {
       const mergedPaths = new Set(merged.map(n => normPath(n.path)));
       const lateNotes = allNotesRef.current.filter(n => {
         const key = normPath(n.path);
-        return !beforePaths.has(key) && !mergedPaths.has(key);
+        return roots.some(root => isPathWithin(n.path, root)) && !beforePaths.has(key) && !mergedPaths.has(key);
       });
       if (lateNotes.length > 0) {
         merged = [...merged, ...lateNotes].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
@@ -309,25 +323,37 @@ export function UnifiedTree() {
       setAllNotes(merged);
       useNotesStore.getState().setNotesFromCache(merged);
       try { localStorage.setItem('miaoyan.scanTotal', String(merged.length)); } catch { /* 隐私模式等场景忽略 */ }
-    } catch (e) { console.error('Failed to load all notes:', e); }
-    finally { setScanning(false); }
+    } catch (e) {
+      if (isCurrent()) window.dispatchEvent(new CustomEvent('show-toast', { detail: { type: 'warning', message: `扫描未完成，已保留现有列表 / Scan incomplete; existing notes were kept: ${String(e)}` } }));
+    } finally { if (isCurrent()) setScanning(false); }
   }, []);
 
   // Load all notes on mount / storage change / mixed folder changes;
   // 纯新增由导入链路 scan_folder 增量扫描（chunk 事件自动合并）、纯移除由 removeFolderLocal 本地过滤，均跳过避免全库重扫
-  const prevExtraRef = useRef<string[] | null>(null);
+  const prevLibraryRef = useRef<{ root: string; extras: string[]; revision: number } | null>(null);
   useEffect(() => {
-    const prev = prevExtraRef.current;
-    const next = config.extra_folders || [];
-    prevExtraRef.current = next;
-    if (prev !== null) {
-      const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
-      const added = next.filter(f => !prev.some(p => norm(p) === norm(f)));
-      const removed = prev.filter(f => !next.some(p => norm(p) === norm(f)));
+    libraryMounted.current = true;
+    return () => { libraryMounted.current = false; fullLoadGeneration.current++; prevLibraryRef.current = null; };
+  }, []);
+  useEffect(() => {
+    const prev = prevLibraryRef.current;
+    const next = config.extra_folders;
+    prevLibraryRef.current = { root: config.storage_path, extras: next, revision: storageRevision };
+    const mainChanged = prev === null || prev.revision !== storageRevision || pathIdentity(prev.root) !== pathIdentity(config.storage_path);
+    if (prev !== null && mainChanged) {
+      const roots = [config.storage_path, ...next].filter(Boolean);
+      const kept = allNotesRef.current.filter(note => roots.some(root => isPathWithin(note.path, root)));
+      allNotesRef.current = kept;
+      setAllNotes(kept);
+      useNotesStore.getState().setNotesFromCache(kept);
+    }
+    if (!mainChanged && prev !== null) {
+      const added = next.filter(folder => !prev.extras.some(old => pathIdentity(old) === pathIdentity(folder)));
+      const removed = prev.extras.filter(folder => !next.some(current => pathIdentity(current) === pathIdentity(folder)));
       if (added.length === 0 || removed.length === 0) return;
     }
-    reloadAllNotes();
-  }, [config.storage_path, config.extra_folders, reloadAllNotes]);
+    void reloadAllNotes();
+  }, [config.storage_path, config.extra_folders, storageRevision, reloadAllNotes]);
 
   // 非扫描态下把当前总数回写持久化（增量导入/文件监听变更后，下次启动的分数分母即时准确）
   useEffect(() => {
@@ -338,15 +364,11 @@ export function UnifiedTree() {
 
   /* ── 渐进加载：Rust 每扫完一个顶层目录发 chunk 事件，前端立即并入，首屏/全量刷新逐目录实时显示 ── */
   useEffect(() => {
-    const unNotes = listen<{ dir: string; notes: NoteMetadata[] }>('miaoyan://notes-chunk', (e) => {
-      // 在途扫描的 chunk 可能属于已移除文件夹：只并入当前根（storage_path + extra_folders）之下的笔记
+    const unNotes = listen<ScanEvent<{ dir: string; notes: NoteMetadata[] }>>('miaoyan://notes-chunk', (e) => {
       const cfg = useSettingsStore.getState().config;
-      const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean)
-        .map(p => p.replace(/\\/g, '/').toLowerCase());
-      const valid = e.payload.notes.filter(n => {
-        const np = n.path.replace(/\\/g, '/').toLowerCase();
-        return roots.some(r => np === r || np.startsWith(r + '/'));
-      });
+      if (!isCurrentScan(e.payload.scan_id, 'notes', cfg.storage_path, cfg.extra_folders)) return;
+      const roots = [cfg.storage_path, ...cfg.extra_folders].filter(Boolean);
+      const valid = e.payload.data.notes.filter(note => roots.some(root => isPathWithin(note.path, root)));
       if (valid.length === 0) return;
       // 按本 chunk 路径集合精确去重（顶层文件 chunk 的 dir 为根目录，前缀剔除会误删整棵子树）
       const incoming = new Set(valid.map(n => n.path.replace(/\\/g, '/').toLowerCase()));
@@ -360,11 +382,13 @@ export function UnifiedTree() {
         return next;
       });
     });
-    const unProjects = listen<Project>('miaoyan://project-chunk', (e) => {
-      useNotesStore.getState().mergeProjectChunk(e.payload);
+    const unProjects = listen<ScanEvent<Project>>('miaoyan://project-chunk', (e) => {
+      const cfg = useSettingsStore.getState().config;
+      if (isCurrentScan(e.payload.scan_id, 'projects', cfg.storage_path, cfg.extra_folders)) useNotesStore.getState().mergeProjectChunk(e.payload.data);
     });
-    const unTotal = listen<number>('miaoyan://scan-total', (e) => {
-      setScanTotal(e.payload);
+    const unTotal = listen<ScanEvent<number>>('miaoyan://scan-total', (e) => {
+      const cfg = useSettingsStore.getState().config;
+      if (isCurrentScan(e.payload.scan_id, 'notes', cfg.storage_path, cfg.extra_folders)) setScanTotal(e.payload.data);
     });
     return () => { unNotes.then(fn => fn()); unProjects.then(fn => fn()); unTotal.then(fn => fn()); };
   }, []);
@@ -375,21 +399,44 @@ export function UnifiedTree() {
     await loadProjects(config.storage_path);
   }, [reloadAllNotes, loadProjects, config.storage_path]);
 
-  /* ── 增量移除额外文件夹：本地立即过滤文件夹行与其笔记，零全扫（行与计数同帧消失） ── */
-  const removeFolderLocal = useCallback((folderPath: string) => {
-    const rm = folderPath.replace(/\\/g, '/').toLowerCase();
-    const inRemoved = (np: string) => np === rm || np.startsWith(rm + '/');
-    const strip = (list: Project[]): Project[] => list
-      .filter(p => !inRemoved(p.path.replace(/\\/g, '/').toLowerCase()))
-      .map(p => ({ ...p, children: strip(p.children) }));
-    useNotesStore.setState(s => ({ projects: strip(s.projects) }));
-    setAllNotes(prev => {
-      const next = prev.filter(n => !inRemoved(n.path.replace(/\\/g, '/').toLowerCase()));
-      allNotesRef.current = next;
-      useNotesStore.getState().setNotesFromCache(next);
-      return next;
-    });
-  }, []);
+  const removeFolderLocal = useCallback(async (folderPath: string): Promise<void> => {
+    if (!libraryMounted.current) return;
+    const current = useSettingsStore.getState();
+    if (current.config.extra_folders.some(folder => pathIdentity(folder) === pathIdentity(folderPath))) return;
+    const roots = [current.config.storage_path, ...current.config.extra_folders].filter(Boolean);
+    const signature = JSON.stringify([current.storageRevision, ...roots.map(pathIdentity)]);
+    try {
+      const overlaps = await scopeRootsOverlap([folderPath], roots);
+      if (!libraryMounted.current) return;
+      const latest = useSettingsStore.getState();
+      const latestRoots = [latest.config.storage_path, ...latest.config.extra_folders].filter(Boolean);
+      if (signature !== JSON.stringify([latest.storageRevision, ...latestRoots.map(pathIdentity)])) {
+        await removeFolderLocal(folderPath);
+        return;
+      }
+      if (overlaps) {
+        await Promise.all([reloadAllNotes(), loadProjects(latest.config.storage_path)]);
+        return;
+      }
+      const strip = (list: Project[]): Project[] => list.filter(project => !isPathWithin(project.path, folderPath)).map(project => ({ ...project, children: strip(project.children) }));
+      useNotesStore.setState(state => ({ projects: strip(state.projects), activeFolder: state.activeFolder && isPathWithin(state.activeFolder, folderPath) ? null : state.activeFolder }));
+      setAllNotes(prev => {
+        const next = prev.filter(note => !isPathWithin(note.path, folderPath));
+        allNotesRef.current = next;
+        useNotesStore.getState().setNotesFromCache(next);
+        return next;
+      });
+    } catch (error) {
+      if (!libraryMounted.current) return;
+      const latest = useSettingsStore.getState();
+      const latestRoots = [latest.config.storage_path, ...latest.config.extra_folders].filter(Boolean);
+      if (signature !== JSON.stringify([latest.storageRevision, ...latestRoots.map(pathIdentity)])) {
+        await removeFolderLocal(folderPath);
+        return;
+      }
+      window.dispatchEvent(new CustomEvent('show-toast', { detail: { type: 'warning', message: `目录设置已保存，但视图校验失败，请刷新 / Folder settings saved; view validation failed, please refresh: ${String(error)}` } }));
+    }
+  }, [reloadAllNotes, loadProjects]);
 
   /* ── 增量换行（重命名/移动）：本地立即把旧路径行换成新路径行，零全扫 ──
      全量刷新的 chunk 是逐目录渐进并入，旧路径行要到扫描收尾才消失——期间新旧标题会并存闪现 */
@@ -400,7 +447,7 @@ export function UnifiedTree() {
       if (!existing) return prev;
       const next = [
         ...prev.filter(n => n.path.replace(/\\/g, '/').toLowerCase() !== oldKey),
-        { ...existing, id: newPath, path: newPath, title: newTitle },
+        { ...existing, id: newPath, path: newPath, title: newTitle, is_encrypted: newPath.toLowerCase().endsWith('.encrypted') },
       ].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
       allNotesRef.current = next;
       useNotesStore.getState().setNotesFromCache(next);
@@ -488,9 +535,6 @@ export function UnifiedTree() {
   }, []);
 
   const dirRemoveLocal = useCallback((dirPath: string) => {
-    const cfg = useSettingsStore.getState().config;
-    const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean);
-    if (roots.some(r => normPath(r) === normPath(dirPath))) return;
     // 非笔记文件（图片/附件）也会走到这里：与已知目录/笔记都不沾边则直接忽略
     const known = projectTreeHas(useNotesStore.getState().projects, dirPath)
       || allNotesRef.current.some(n => isUnderPath(n.path, dirPath));
@@ -569,12 +613,84 @@ export function UnifiedTree() {
   /* ── Watch filesystem changes ── */
   useEffect(() => {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    let pendingFiles = new Map<string, string>(); // path -> 最近事件类型
+    let pendingFiles = new Map<string, string>();
+    let metadataRunning = false;
+    let active = true;
+    let structureGeneration = 0;
+    let directoryRunning: { path: string } | null = null;
+    const pendingDirectories = new Map<string, { path: string }>();
+
+    const applyDirectory = (path: string, project: Project | null, notes: NoteMetadata[]) => {
+      const cfg = useSettingsStore.getState().config;
+      const roots = [cfg.storage_path, ...cfg.extra_folders].filter(Boolean);
+      if (!roots.some(root => isUnderPath(path, root))) return;
+      if (!project) { dirRemoveLocal(path); return; }
+      if (normPath(path) === normPath(cfg.storage_path)) {
+        const extras = new Set(cfg.extra_folders.map(normPath));
+        useNotesStore.setState(state => ({ projects: sortProjects([
+          ...state.projects.filter(item => !isUnderPath(item.path, path) || extras.has(normPath(item.path))),
+          ...project.children.filter(item => !extras.has(normPath(item.path))),
+        ]) }));
+      } else {
+        dirCreateLocal(path);
+        const replace = (items: Project[]): Project[] => items.map(item => normPath(item.path) === normPath(path) ? project : { ...item, children: replace(item.children) });
+        useNotesStore.setState(state => ({ projects: replace(state.projects) }));
+      }
+      const next = [...allNotesRef.current.filter(note => !isUnderPath(note.path, path)), ...notes];
+      allNotesRef.current = next;
+      setAllNotes(next);
+      useNotesStore.getState().setNotesFromCache(next);
+      void useNotesStore.getState().reloadOpenTabs(notes.map(note => note.path));
+    };
+
+    const drainDirectories = async () => {
+      if (!active || directoryRunning) return;
+      while (active && pendingDirectories.size) {
+        const [key, request] = pendingDirectories.entries().next().value!;
+        pendingDirectories.delete(key);
+        directoryRunning = request;
+        try {
+          const snapshot = await readDirectorySnapshot(request.path);
+          if (active && ![...pendingDirectories.values()].some(next => isUnderPath(next.path, request.path) || isUnderPath(request.path, next.path))) {
+            applyDirectory(request.path, snapshot.project, snapshot.notes);
+          }
+        } catch (error) {
+          if (active) window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: String(error), type: 'warning' } }));
+        } finally { directoryRunning = null; }
+      }
+    };
+
+    const queueDirectory = (path: string) => {
+      ++structureGeneration;
+      const cfg = useSettingsStore.getState().config;
+      const roots = [cfg.storage_path, ...cfg.extra_folders].filter(root => root && isUnderPath(path, root));
+      if (!roots.length) return;
+      let refreshPath = path;
+      const root = roots.sort((a, b) => b.length - a.length)[0];
+      while (normPath(refreshPath) !== normPath(root)) {
+        const parent = getParentPath(refreshPath);
+        if (normPath(parent) === normPath(root) || projectTreeHas(useNotesStore.getState().projects, parent)) break;
+        refreshPath = parent;
+      }
+      if (directoryRunning && (isUnderPath(refreshPath, directoryRunning.path) || isUnderPath(directoryRunning.path, refreshPath))) {
+        refreshPath = isUnderPath(refreshPath, directoryRunning.path) ? directoryRunning.path : refreshPath;
+      }
+      for (const pending of pendingDirectories.values()) if (isUnderPath(refreshPath, pending.path)) refreshPath = pending.path;
+      for (const [key, pending] of pendingDirectories) if (isUnderPath(pending.path, refreshPath)) pendingDirectories.delete(key);
+      pendingDirectories.set(normPath(refreshPath), { path: refreshPath });
+      if (pendingDirectories.size > 256) {
+        pendingDirectories.clear();
+        for (const root of [cfg.storage_path, ...cfg.extra_folders].filter(Boolean)) pendingDirectories.set(normPath(root), { path: root });
+      }
+      void drainDirectories();
+    };
 
     // Start watching storage path + extra folders
     const watchPaths = [config.storage_path, ...(config.extra_folders || [])].filter(Boolean);
     if (watchPaths.length > 0) {
-      startWatching(watchPaths).catch(e => console.error('Failed to start watcher:', e));
+      startWatching(watchPaths).catch(error => {
+        if (active) window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: String(error), type: 'warning' } }));
+      });
     }
 
     // 文件级增量更新：只对变更文件取元数据，不重扫目录树。
@@ -582,16 +698,22 @@ export function UnifiedTree() {
     const applyIncremental = async (files: Map<string, string>) => {
       try {
         const cfg = useSettingsStore.getState().config;
-        const paths = [...files.keys()];
-        const probePaths = paths.filter(p => files.get(p) !== 'remove');
-        const upsertedRaw = probePaths.length
-          ? await getNotesMetadata(probePaths, cfg.storage_path, cfg.extra_folders || [])
-          : [];
+        const generation = structureGeneration;
+        const requestedPaths = [...files.keys()];
+        const upsertedRaw = await getNotesMetadata(requestedPaths, cfg.storage_path, cfg.extra_folders || []);
+        if (!active) return;
+        if (generation !== structureGeneration) {
+          for (const path of requestedPaths) if (!pendingFiles.has(normPath(path))) pendingFiles.set(normPath(path), path);
+          return;
+        }
+        const paths = requestedPaths.filter(path => !pendingFiles.has(normPath(path)));
+        const accepted = new Set(paths.map(normPath));
+        const probePaths = paths;
         // 外部变更可能来自已移除文件夹：只接受当前根之下的笔记，避免移除行复活
         const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean).map(normPath);
-        const upserted = upsertedRaw.filter(n => roots.some(r => isUnderPath(n.path, r)));
+        const upserted = upsertedRaw.filter(n => accepted.has(normPath(n.path)) && roots.some(r => isUnderPath(n.path, r)));
         const upsertedByKey = new Map(upserted.map(n => [normPath(n.path), n]));
-        const removedSet = new Set(paths.filter(p => files.get(p) === 'remove').map(normPath));
+        const removedSet = new Set<string>();
         // create/modify 事件但文件已读不到 → 视为删除
         for (const p of probePaths) {
           if (!upsertedByKey.has(normPath(p))) removedSet.add(normPath(p));
@@ -615,38 +737,57 @@ export function UnifiedTree() {
           next.push(...added);
           next.sort((a, b) => b.modified_at.localeCompare(a.modified_at));
         }
-        if (!changed) return;
-        allNotesRef.current = next;
-        setAllNotes(next);
-        useNotesStore.getState().setNotesFromCache(next);
-        // 外部变更的打开标签重载内容
-        useNotesStore.getState().reloadOpenTabs(paths);
+        if (changed) {
+          allNotesRef.current = next;
+          setAllNotes(next);
+          useNotesStore.getState().setNotesFromCache(next);
+        }
+        await useNotesStore.getState().reloadOpenTabs(paths);
       } catch (e) {
-        console.error('Incremental refresh failed, falling back to full scan:', e);
-        await reloadAllNotes();
+        if (active) window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: String(e), type: 'warning' } }));
       }
     };
 
+    const drainMetadata = async () => {
+      if (!active || metadataRunning) return;
+      metadataRunning = true;
+      try {
+        while (active && pendingFiles.size && debounceTimer === null) {
+          const files = new Map([...pendingFiles.values()].map(path => [path, 'probe']));
+          pendingFiles = new Map();
+          await applyIncremental(files);
+        }
+      } finally { metadataRunning = false; }
+    };
+
     const unlisten = listen<{ type: string; paths: string[] }>('fs-change', (event) => {
-      // 吞掉应用自身写入的回环事件（自动保存不再触发任何刷新）
-      const external = event.payload.paths.filter(p => !useNotesStore.getState().consumeRecentWrite(p));
+      if (event.payload.type === 'rescan') {
+        for (const path of event.payload.paths) queueDirectory(path);
+        return;
+      }
+      const external = event.payload.paths;
       if (external.length === 0) return;
 
       let hasNote = false;
       for (const p of external) {
         // 目录 Modify 噪音与其他非笔记文件不参与树刷新
         if (isNoteFilePath(p)) {
-          pendingFiles.set(p, event.payload.type);
+          pendingFiles.set(normPath(p), p);
+          if (pendingFiles.size > 1024) {
+            pendingFiles.clear();
+            const cfg = useSettingsStore.getState().config;
+            for (const root of [cfg.storage_path, ...cfg.extra_folders].filter(Boolean)) queueDirectory(root);
+            return;
+          }
           hasNote = true;
         }
       }
       if (!hasNote) return;
 
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(async () => {
-        const files = pendingFiles;
-        pendingFiles = new Map();
-        if (files.size > 0) await applyIncremental(files);
+      if (debounceTimer !== null) return;
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        void drainMetadata();
       }, 400);
     });
 
@@ -655,39 +796,30 @@ export function UnifiedTree() {
       'fs-structure',
       (event) => {
         const { kind, path: p, from, to } = event.payload;
-        const store = useNotesStore.getState();
-        // 自身操作已在本地完成，吞掉 watcher 回环
-        const own = (p && store.consumeRecentWrite(p))
-          || (from && store.consumeRecentWrite(from))
-          || (to && store.consumeRecentWrite(to));
-        if (own) return;
-        if (kind === 'dir-create' && p) dirCreateLocal(p);
-        else if (kind === 'dir-rename' && from && to) dirRenameLocal(from, to);
-        else if (kind === 'path-remove' && p) dirRemoveLocal(p);
+        if (kind === 'dir-create' && p) { dirCreateLocal(p); queueDirectory(p); }
+        else if (kind === 'dir-rename' && from && to) { dirRenameLocal(from, to); queueDirectory(from); queueDirectory(to); }
+        else if (kind === 'path-remove' && p) queueDirectory(p);
       },
     );
 
     return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
+      active = false;
+      pendingDirectories.clear();
+      pendingFiles.clear();
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
       unlisten.then(fn => fn());
       unlistenStructure.then(fn => fn());
     };
   }, [config.storage_path, config.extra_folders, reloadAllNotes, dirCreateLocal, dirRenameLocal, dirRemoveLocal]);
 
-  /* ── Sync external search query (e.g. deep link) into local input ── */
-  useEffect(() => {
-    if (document.activeElement !== searchRef.current && searchQuery !== searchInput) {
-      setSearchInput(searchQuery);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery]);
-
-  /* ── Search filter (local, by title) ── */
   const filteredNotes = useMemo(() => {
     const q = searchInput.trim().toLowerCase();
     if (!q) return allNotes;
-    return allNotes.filter(n => n.title.toLowerCase().includes(q));
-  }, [allNotes, searchInput]);
+    const bodyMatches = new Set(searchResults.map(note => normPath(note.path)));
+    const candidates = new Map([...allNotes, ...searchResults].map(note => [normPath(note.path), note]));
+    return [...candidates.values()].filter(note => bodyMatches.has(normPath(note.path)) ||
+      note.title.toLowerCase().includes(q) || getParentPath(note.path).toLowerCase().includes(q));
+  }, [allNotes, searchInput, searchResults]);
 
   /* ── Group notes by parent folder path ── */
   const notesByFolder = useMemo(() => {
@@ -728,16 +860,12 @@ export function UnifiedTree() {
     if (!contextMenu || contextMenu.type !== 'folder') return;
     const folderPath = contextMenu.project.path;
     try {
-      const note = await createNote(folderPath, `Untitled-${Date.now()}`);
-      // Expand the folder so the new row is visible for inline renaming
+      const created = await useNotesStore.getState().createDocument(folderPath, `Untitled-${Date.now()}`);
       const st = useNotesStore.getState();
-      if (!st.expandedFolders.includes(folderPath)) {
-        st.toggleExpandedFolder(folderPath);
-      }
-      st.registerCreatedNote(note);
-      await selectNote(note);
-      setRenamingNoteId(note.id);
-      setRenameNoteValue(stripKnownExt(note.title));
+      if (!created || created.requestId === null || !st.isCurrentOpen(created.requestId)) return;
+      if (!st.expandedFolders.includes(folderPath)) st.toggleExpandedFolder(folderPath);
+      setRenamingNoteId(created.note.id);
+      setRenameNoteValue(stripKnownExt(created.note.title));
     } catch (e) { console.error('Failed to create note:', e); }
     setContextMenu(null);
   }, [contextMenu, selectNote]);
@@ -747,10 +875,7 @@ export function UnifiedTree() {
     if (!contextMenu || contextMenu.type !== 'note') return;
     const path = contextMenu.note.path;
     try {
-      // 先标记自身操作：吞掉删除引发的 watcher 回环，避免重复摘行
-      useNotesStore.getState().markRecentWrite(path);
-      await deleteNote(path);
-      removeNoteLocal(path);
+      if (await useNotesStore.getState().deleteDocument(path)) removeNoteLocal(path);
     } catch (e) { console.error('Failed to delete note:', e); }
     setContextMenu(null);
   }, [contextMenu, removeNoteLocal]);
@@ -766,16 +891,14 @@ export function UnifiedTree() {
     const newTitle = renameNoteValue.trim();
     if (!newTitle || newTitle === note.title || newTitle === stripKnownExt(note.title)) { setRenamingNoteId(null); return; }
     try {
-      // 标记自身操作，吞掉 rename 引发的 watcher 回环事件，避免增量更新与全量刷新竞争
-      useNotesStore.getState().markRecentWrite(note.path);
-      const newPath = await renameNote(note.path, newTitle);
-      useNotesStore.getState().markRecentWrite(newPath);
-      const newFileName = newPath.split(/[\\/]/).pop() ?? newTitle;
-      useNotesStore.getState().applyNotePathChange(note.path, newPath, newFileName);
-      setRenamingNoteId(null);
-      if (useNotesStore.getState().activeNote?.path === newPath) {
-        window.dispatchEvent(new CustomEvent('editor-focus'));
-      }
+      await useNotesStore.getState().withDocumentPathChange(note.path, false, async () => {
+        const newPath = await renameNote(note.path, newTitle);
+        const newFileName = newPath.split(/[\\/]/).pop() ?? newTitle;
+        useNotesStore.getState().applyNotePathChange(note.path, newPath, newFileName);
+        if (useNotesStore.getState().activeNote?.path === newPath) {
+          window.dispatchEvent(new CustomEvent('editor-focus'));
+        }
+      }, [{ path: documentRenameTarget(note.path, newTitle), directory: false }]);
     } catch (e) { console.error('Failed to rename note:', e); }
     setRenamingNoteId(null);
   }, [renameNoteValue]);
@@ -807,9 +930,10 @@ export function UnifiedTree() {
     const name = prompt(t('sidebar.newFolder'));
     if (!name) return;
     try {
-      const newPath = await createFolder(contextMenu.project.path, name);
-      useNotesStore.getState().markRecentWrite(newPath);
-      dirCreateLocal(newPath);
+      await useNotesStore.getState().withDocumentPathChange(`${contextMenu.project.path}/${name}`, true, async () => {
+        const newPath = await createFolder(contextMenu.project.path, name);
+        dirCreateLocal(newPath);
+      });
     } catch (e) { console.error('Failed to create subfolder:', e); }
     setContextMenu(null);
   }, [contextMenu, dirCreateLocal, t]);
@@ -824,11 +948,10 @@ export function UnifiedTree() {
   const handleRenameFolderSubmit = useCallback(async (project: Project) => {
     if (!renameFolderValue.trim() || renameFolderValue.trim() === project.name) { setRenamingFolderPath(null); return; }
     try {
-      // 先标记新旧路径：目录改名会同时产生 From/To 两条结构回环事件
-      useNotesStore.getState().markRecentWrite(project.path);
-      const newPath = await renameFolder(project.path, renameFolderValue.trim());
-      useNotesStore.getState().markRecentWrite(newPath);
-      dirRenameLocal(project.path, newPath);
+      await useNotesStore.getState().withDocumentPathChange(project.path, true, async () => {
+        const newPath = await renameFolder(project.path, renameFolderValue.trim());
+        dirRenameLocal(project.path, newPath);
+      }, [{ path: documentRenameTarget(project.path, renameFolderValue.trim(), true), directory: true }]);
     } catch (e) { console.error('Failed to rename folder:', e); }
     setRenamingFolderPath(null);
   }, [renameFolderValue, dirRenameLocal]);
@@ -837,9 +960,7 @@ export function UnifiedTree() {
     if (!contextMenu || contextMenu.type !== 'folder') return;
     const path = contextMenu.project.path;
     try {
-      useNotesStore.getState().markRecentWrite(path);
-      await deleteFolder(path);
-      dirRemoveLocal(path);
+      if (await useNotesStore.getState().deleteDocument(path, true)) dirRemoveLocal(path);
     } catch (e) { console.error('Failed to delete folder:', e); }
     setContextMenu(null);
   }, [contextMenu, dirRemoveLocal]);
@@ -940,18 +1061,6 @@ export function UnifiedTree() {
     return project.children.some(child => folderMatchesSearch(child, query));
   }, [notesByFolder]);
 
-  /* ── Persist expanded folders when search is cleared ── */
-  const prevSearchRef = useRef(searchInput);
-  useEffect(() => {
-    const prev = prevSearchRef.current.trim();
-    const curr = searchInput.trim();
-    prevSearchRef.current = searchInput;
-    if (prev && !curr) {
-      // No folder selected → collapse all auto-expanded folders
-        clearExpandedFolders();
-    }
-  }, [searchInput, clearExpandedFolders]);
-
   /* ── Flatten visible rows for virtualized rendering ── */
   type TreeRow =
     | { kind: 'folder'; project: Project; depth: number }
@@ -1001,16 +1110,16 @@ export function UnifiedTree() {
         onDrop={async (e) => {
           e.preventDefault(); e.stopPropagation();
           const notePath = e.dataTransfer.getData('application/note-path');
+          e.currentTarget.style.backgroundColor = isActive ? 'var(--accent-light)' : 'transparent';
           if (notePath) {
             try {
-              useNotesStore.getState().markRecentWrite(notePath);
-              const newPath = await moveNote(notePath, project.path);
-              useNotesStore.getState().markRecentWrite(newPath);
-              const newFileName = newPath.split(/[\\/]/).pop() ?? '';
-              useNotesStore.getState().applyNotePathChange(notePath, newPath, newFileName);
+              await useNotesStore.getState().withDocumentPathChange(notePath, false, async () => {
+                const newPath = await moveNote(notePath, project.path);
+                const newFileName = newPath.split(/[\\/]/).pop() ?? '';
+                useNotesStore.getState().applyNotePathChange(notePath, newPath, newFileName);
+              }, [{ path: `${project.path}/${baseName(notePath)}`, directory: false }]);
             } catch (err) { console.error('Failed to move note:', err); }
           }
-          e.currentTarget.style.backgroundColor = isActive ? 'var(--accent-light)' : 'transparent';
         }}
         onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, type: 'folder', project }); }}
         onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
@@ -1048,12 +1157,13 @@ export function UnifiedTree() {
           <button
             className="flex-shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5"
             style={{ color: 'var(--text-tertiary)' }}
-            onClick={(e) => {
+            disabled={savingSettings}
+            onClick={async (e) => {
               e.stopPropagation();
-              const newFolders = config.extra_folders.filter(f => f !== project.path);
-              useSettingsStore.getState().updateConfig({ extra_folders: newFolders });
-              // 增量移除：本地立即过滤，不触发全库重扫
-              removeFolderLocal(project.path);
+              const settings = useSettingsStore.getState();
+              const desired = settings.draftConfig ?? settings.config;
+              const newFolders = desired.extra_folders.filter(folder => pathIdentity(folder) !== pathIdentity(project.path));
+              if (await settings.updateConfig({ extra_folders: newFolders })) await removeFolderLocal(project.path);
             }}
             title="Remove from tree (keeps local files)"
           >
@@ -1132,10 +1242,16 @@ export function UnifiedTree() {
           })}
         </div>
 
+        {searchStatus === 'loading' && <div role="status" className="px-3 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>{t('notesList.searching')}</div>}
+        {searchError && <div role="alert" className="px-3 py-2 text-xs space-y-2" style={{ color: 'var(--text-secondary)' }}>
+          <p>{t('notesList.searchFailed')}</p>
+          <p className="break-all">{searchError}</p>
+          <button className="rounded border px-2 py-1" onClick={() => void setSearchQuery(searchQuery, config.storage_path)}>{t('notesList.retrySearch')}</button>
+        </div>}
         {/* Loading / Empty */}
         {isLoading && allNotes.length === 0 ? (
           <div className="flex items-center justify-center h-12 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>Loading...</div>
-        ) : filteredNotes.length === 0 && searchInput.trim() ? (
+        ) : filteredNotes.length === 0 && searchInput.trim() && searchStatus === 'idle' ? (
           <div className="flex items-center justify-center h-12 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {t('notesList.noResults')}
           </div>
@@ -1279,7 +1395,8 @@ export function UnifiedTree() {
           notePath={encryptionDialog.notePath}
           visible={encryptionDialog.visible}
           onClose={() => setEncryptionDialog(null)}
-          onUnlocked={(content, password) => { onNoteUnlocked(content, password); }}
+          requestId={encryptionDialog.requestId}
+          onUnlocked={onNoteUnlocked}
           onEncrypted={() => handleRefreshAll()}
           onRemoved={() => handleRefreshAll()}
         />

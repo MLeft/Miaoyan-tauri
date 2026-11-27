@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useId, useContext, createContext } from 'react';
+import { useDialogFocus } from '../shared/useDialogFocus';
 import { useSettingsStore } from '../../stores/settings-store';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -7,6 +8,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { setAlwaysOnTop, detectCloudSync, getMdAssociationStatus, setMdAssociation, type CloudSyncInfo } from '../../services/tauri-bridge';
 
 type Tab = 'interface' | 'experience' | 'editor' | 'typography' | 'about';
+const RowLabelContext = createContext('');
 
 // 原版 PrefsFormMetrics
 const LABEL_WIDTH = 164;   // px
@@ -22,11 +24,15 @@ interface Props {
 
 export function SettingsDialog({ onClose }: Props) {
   const { t } = useTranslation();
-  const { config, updateConfig } = useSettingsStore();
+  const { config: activeConfig, draftConfig, updateConfig, saveStatus, saveError, retrySave } = useSettingsStore();
+  const config = draftConfig ?? activeConfig;
   const [activeTab, setActiveTab] = useState<Tab>('interface');
   const [cloudInfo, setCloudInfo] = useState<CloudSyncInfo | null>(null);
   const isWindows = navigator.userAgent.includes('Windows');
   const [mdAssociated, setMdAssociated] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogTitleId = useId();
+  const handleDialogKey = useDialogFocus(dialogRef, onClose);
 
   useEffect(() => {
     detectCloudSync()
@@ -65,6 +71,12 @@ export function SettingsDialog({ onClose }: Props) {
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={dialogTitleId}
+        tabIndex={-1}
+        onKeyDown={handleDialogKey}
         className="flex rounded-xl overflow-hidden dialog-content"
         style={{
           width: 680,
@@ -102,8 +114,7 @@ export function SettingsDialog({ onClose }: Props) {
                 width: activeTab === tab.id ? 'calc(100% - 16px)' : '100%',
                 border: 'none',
                 cursor: 'pointer',
-                outline: 'none',
-                lineHeight: '22px',
+                                lineHeight: '22px',
                 boxSizing: 'border-box',
               }}
             >
@@ -117,6 +128,7 @@ export function SettingsDialog({ onClose }: Props) {
           {/* 关闭按钮 */}
           <button
             onClick={onClose}
+            aria-label={t('settings.close')}
             style={{
               position: 'absolute',
               top: 12,
@@ -140,7 +152,7 @@ export function SettingsDialog({ onClose }: Props) {
           </button>
 
           {/* 标题 */}
-          <div style={{
+          <div id={dialogTitleId} style={{
             paddingTop: 14,
             paddingLeft: 28,
             paddingBottom: 0,
@@ -155,6 +167,21 @@ export function SettingsDialog({ onClose }: Props) {
             {tabs.find(t => t.id === activeTab)?.label}
           </div>
 
+          {saveStatus === 'saving' && (
+            <div role="status" aria-live="polite" style={{ padding: '6px 28px', fontSize: 12, color: 'var(--text-secondary)' }}>
+              {t('settings.saving')}
+            </div>
+          )}
+          {saveError && (
+            <div role="alert" style={{ margin: '10px 28px 0', padding: '8px 10px', borderRadius: 6, backgroundColor: 'var(--danger-bg)', color: 'var(--danger-color)', fontSize: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <strong>{t('settings.saveFailed')}</strong>
+                <MacButton onClick={() => { void retrySave(); }}>{t('settings.retrySave')}</MacButton>
+              </div>
+              <div style={{ overflowWrap: 'anywhere', marginTop: 4 }}>{saveError}</div>
+            </div>
+          )}
+          <div style={{ padding: '8px 28px 0', fontSize: 11, color: 'var(--text-secondary)' }}>{t('settings.saveHint')}</div>
           {/* 表单区域 */}
           <div style={{ flex: 1, overflowY: 'auto', paddingTop: PAGE_TOP, paddingLeft: 28, paddingRight: 28, paddingBottom: PAGE_H }}>
             {activeTab === 'interface' && (
@@ -318,6 +345,7 @@ export function SettingsDialog({ onClose }: Props) {
                 <Row label={`${t('settings.fontSize')}:`}>
                   <MacInput
                     type="number"
+                    min={8} max={96}
                     value={String(config.editor_font_size)}
                     onChange={(v) => updateConfig({ editor_font_size: Number(v) })}
                     width={80}
@@ -327,6 +355,7 @@ export function SettingsDialog({ onClose }: Props) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <MacInput
                       type="number"
+                      min={0} max={3_600_000} step={1}
                       value={String(config.auto_save_interval)}
                       onChange={(v) => updateConfig({ auto_save_interval: Number(v) })}
                       width={80}
@@ -350,6 +379,7 @@ export function SettingsDialog({ onClose }: Props) {
                 <Row label={`${t('settings.lineSpacing')}:`}>
                   <MacInput
                     type="number"
+                    min={0.5} max={10}
                     value={String(config.line_spacing)}
                     onChange={(v) => {
                       const val = Number(v);
@@ -362,6 +392,7 @@ export function SettingsDialog({ onClose }: Props) {
                 <Row label={`${t('settings.letterSpacing')}:`}>
                   <MacInput
                     type="number"
+                    min={0} max={2}
                     value={String(config.letter_spacing)}
                     onChange={(v) => {
                       const val = Number(v);
@@ -389,6 +420,7 @@ export function SettingsDialog({ onClose }: Props) {
                 <Row label={`${t('settings.previewFontSize')}:`}>
                   <MacInput
                     type="number"
+                    min={8} max={96}
                     value={String(config.preview_font_size)}
                     onChange={(v) => updateConfig({ preview_font_size: Number(v) })}
                     width={80}
@@ -454,6 +486,7 @@ export function SettingsDialog({ onClose }: Props) {
                 <Row label={`${t('settings.titleFontSize')}:`}>
                   <MacInput
                     type="number"
+                    min={12} max={48}
                     value={String(config.title_font_size)}
                     onChange={(v) => {
                       const val = Number(v);
@@ -465,6 +498,7 @@ export function SettingsDialog({ onClose }: Props) {
                 <Row label={`${t('settings.presentationFontSize')}:`}>
                   <MacInput
                     type="number"
+                    min={16} max={72}
                     value={String(config.presentation_font_size)}
                     onChange={(v) => {
                       const val = Number(v);
@@ -476,6 +510,7 @@ export function SettingsDialog({ onClose }: Props) {
                 <Row label={`${t('settings.lineHeight')}:`}>
                   <MacInput
                     type="number"
+                    min={1} max={3}
                     value={String(config.line_height)}
                     onChange={(v) => {
                       const val = Number(v);
@@ -499,6 +534,7 @@ export function SettingsDialog({ onClose }: Props) {
 // ── 原版 makePreferencesRow 对应：164px 右对齐标签 + 16px 间距 + 控件 ──
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
+    <RowLabelContext.Provider value={label}>
     <div style={{ display: 'flex', alignItems: 'center', minHeight: ROW_HEIGHT }}>
       <span style={{
         width: LABEL_WIDTH,
@@ -515,6 +551,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
         {children}
       </div>
     </div>
+    </RowLabelContext.Provider>
   );
 }
 
@@ -538,9 +575,11 @@ function MacSelect({
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
 }) {
+  const label = useContext(RowLabelContext);
   return (
     <div style={{ position: 'relative', width: CONTROL_WIDTH }}>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         style={{
@@ -556,8 +595,7 @@ function MacSelect({
           backgroundColor: 'var(--bg-secondary)',
           color: 'var(--text-primary)',
           cursor: 'pointer',
-          outline: 'none',
-        }}
+                  }}
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -578,37 +616,71 @@ function MacSelect({
 
 // macOS 风格文本输入
 function MacInput({
-  value,
-  onChange,
-  type = 'text',
-  width,
-  step,
+  value, onChange, type = 'text', width, step, min, max,
 }: {
   value: string;
-  onChange: (v: string) => void;
+  onChange: (v: string) => void | Promise<boolean>;
   type?: string;
   width?: number;
   step?: number;
+  min?: number;
+  max?: number;
 }) {
+  const { t } = useTranslation();
+  const label = useContext(RowLabelContext);
+  const [draft, setDraft] = useState(value);
+  const [invalid, setInvalid] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const committed = useRef(value);
+  const composing = useRef(false);
+  const errorId = useId();
+  useEffect(() => {
+    setDraft(value);
+    committed.current = value;
+    setInvalid(false);
+  }, [value]);
+  const commit = () => {
+    const input = inputRef.current;
+    if (!input || composing.current) return;
+    const currentValue = input.value;
+    if (!currentValue.trim() || !input.checkValidity()) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    if (committed.current === currentValue) return;
+    committed.current = currentValue;
+    void onChange(currentValue);
+  };
   return (
-    <input
-      type={type}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      step={step}
-      style={{
-        width: width ?? CONTROL_WIDTH,
-        height: ROW_HEIGHT - 4,
-        paddingLeft: 8,
-        paddingRight: 8,
-        fontSize: 13,
-        border: '0.5px solid var(--border)',
-        borderRadius: 6,
-        backgroundColor: 'var(--bg-secondary)',
-        color: 'var(--text-primary)',
-        outline: 'none',
-      }}
-    />
+    <div style={{ width: width ?? CONTROL_WIDTH }}>
+      <input
+        ref={inputRef}
+        aria-label={label}
+        type={type}
+        value={draft}
+        onChange={(e) => { setDraft(e.target.value); setInvalid(false); }}
+        onBlur={commit}
+        onCompositionStart={() => { composing.current = true; }}
+        onCompositionEnd={() => { composing.current = false; }}
+        onKeyDown={(e) => {
+          if (composing.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        }}
+        step={step ?? (type === 'number' ? 'any' : undefined)}
+        min={min}
+        max={max}
+        required
+        aria-invalid={invalid}
+        aria-describedby={invalid ? errorId : undefined}
+        style={{
+          width: '100%', height: ROW_HEIGHT - 4, paddingLeft: 8, paddingRight: 8, fontSize: 13,
+          border: `0.5px solid ${invalid ? 'var(--danger-color)' : 'var(--border)'}`,
+          borderRadius: 6, backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)',
+        }}
+      />
+      {invalid && <span id={errorId} role="alert" style={{ display: 'block', marginTop: 3, fontSize: 11, color: 'var(--danger-color)' }}>{t('settings.invalidValue')}</span>}
+    </div>
   );
 }
 
@@ -627,8 +699,7 @@ function MacButton({ onClick, children }: { onClick: () => void; children: React
         backgroundColor: 'var(--bg-secondary)',
         color: 'var(--text-primary)',
         cursor: 'pointer',
-        outline: 'none',
-        whiteSpace: 'nowrap',
+                whiteSpace: 'nowrap',
       }}
     >
       {children}
@@ -792,7 +863,7 @@ function AboutPanel() {
   const checkUpdate = async (current: string) => {
     setCheckState({ status: 'checking' });
     try {
-      const res = await fetch(GITHUB_LATEST_RELEASE_API);
+      const res = await fetch(GITHUB_LATEST_RELEASE_API, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) throw new Error(`GitHub API ${res.status}`);
       const data = await res.json();
       const latest = String(data.tag_name || '').replace(/^v/i, '');
@@ -863,8 +934,7 @@ function AboutPanel() {
                   backgroundColor: 'var(--accent)',
                   color: 'white',
                   cursor: 'pointer',
-                  outline: 'none',
-                  whiteSpace: 'nowrap',
+                                    whiteSpace: 'nowrap',
                 }}
               >
                 {t('about.download')}

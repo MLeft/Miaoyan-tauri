@@ -4,22 +4,30 @@ import {
   getAllNotes,
   getNotesInFolder,
   getProjects,
+  getScanId,
+  isCurrentScan,
   readNote,
   writeNote,
   createNote,
+  deleteNote,
+  deleteFolder,
   searchNotes,
+  startSearchSession,
+  invalidateSearch,
   getSortOrder,
   saveSortOrder as saveSortOrderBridge,
   saveEncryptedNote,
+  decryptNote,
+  encryptNote,
+  removeEncryption,
+  saveDocumentCopy,
 } from '../services/tauri-bridge';
 import { useSettingsStore } from './settings-store';
 import { perfReport } from '../services/perf';
 import { useEditorStore } from './editor-store';
 import type { ViewMode } from './editor-store';
 import { isPdfPath } from '../utils/fileType';
-
-// 应用自身最近写入的文件（path → 时间戳），不进 store 避免触发订阅
-const recentWrites = new Map<string, number>();
+import { pathIdentity, isPathWithin } from '../utils/path-identity';
 
 const projectKey = (p: string) => p.replace(/\\/g, '/').toLowerCase();
 
@@ -72,14 +80,80 @@ function insertProjectNode(list: Project[], roots: string[], node: Project): Pro
   return changed ? next : list;
 }
 
-export interface OpenTab {
-  path: string;
+export type DocumentSaveStatus = 'idle' | 'saving' | 'error';
+export interface DocumentPathScope { path: string; directory: boolean }
+
+export function documentRenameTarget(path: string, title: string, directory = false): string {
+  const slash = path.replace(/\\/g, '/');
+  const ext = directory ? '' : (slash.slice(slash.lastIndexOf('/') + 1).match(/\.[^.]+$/)?.[0] ?? '.');
+  return slash.slice(0, slash.lastIndexOf('/') + 1) + title + (ext && !title.endsWith(ext) ? ext : '');
+}
+
+export interface DocumentSessionSnapshot {
+  /** Opaque session lifetime token: stable across edits/saves/moves, new on reopen. */
+  readonly identity: number;
+  readonly path: string;
+  readonly content: string;
+  readonly revision: number;
+  readonly savedRevision: number;
+  readonly isDirty: boolean;
+  readonly saveStatus: DocumentSaveStatus;
+  readonly saveError: string | null;
+  readonly isTemporaryFile: boolean;
+}
+
+export interface DocumentWorkSnapshot { key: string; pending: boolean; error: string | null; draft?: string }
+interface DocumentWork {
+  key: string;
+  run: () => Promise<void>;
+  promise: Promise<boolean> | null;
+  error: string | null;
+  draft?: string;
+}
+
+interface DocumentSession {
+  readonly identity: number;
   note: NoteMetadata;
   content: string;
-  isDirty: boolean;
+  revision: number;
+  savedRevision: number;
+  diskVersion: string;
+  saveStatus: DocumentSaveStatus;
+  saveError: string | null;
+  savePromise: Promise<boolean> | null;
+  drainPromise: Promise<boolean> | null;
+  work: Map<string, DocumentWork>;
+  timer: ReturnType<typeof setTimeout> | null;
+  reloadGeneration: number;
+  pathGeneration: number;
+  password: string | null;
+  temporary: boolean;
   viewMode: ViewMode;
-  encryptionPassword?: string | null;
 }
+
+export interface OpenTab {
+  readonly path: string;
+  readonly note: NoteMetadata;
+  // Compatibility selector, not a second body cache. Read from the session.
+  readonly content: string;
+  readonly isDirty: boolean;
+  readonly viewMode: ViewMode;
+  readonly saveStatus: DocumentSaveStatus;
+  readonly saveError: string | null;
+}
+
+const documentKey = (path: string) => {
+  let slash = path.replace(/\\/g, '/');
+  if (slash.startsWith('//?/UNC/')) slash = '//' + slash.slice(8);
+  else if (slash.startsWith('//?/')) slash = slash.slice(4);
+  // Windows drive/UNC paths are case-insensitive; do not lowercase POSIX paths.
+  return /^[a-z]:\//i.test(slash) || slash.startsWith('//') ? slash.toLowerCase() : slash;
+};
+const encryptedPath = (path: string) => /\.encrypted$/i.test(path);
+const dirty = (session: DocumentSession) => session.revision !== session.savedRevision;
+const warnDocument = (message: string) => {
+  window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type: 'warning' } }));
+};
 
 interface NotesState {
   projects: Project[];
@@ -88,26 +162,36 @@ interface NotesState {
   activeContent: string;
   activeFolder: string | null;
   searchQuery: string;
+  searchResults: NoteMetadata[];
+  searchStatus: 'idle' | 'loading' | 'error';
+  searchError: string | null;
   sortMode: SortMode;
   sortDirection: SortDirection;
   isLoading: boolean;
   isDirty: boolean;
-  saveTimer: ReturnType<typeof setTimeout> | null;
+  activeDocumentReadOnly: boolean;
+  recoveryPaths: string[];
+  setRecoveryPaths: (paths: string[]) => void;
+  isDocumentWritable: (path: string) => boolean;
+  closing: 'draining' | 'destroying' | null;
+  setClosing: (phase: NotesState['closing']) => void;
 
   customSortOrder: string[]; // note paths in custom order
 
   // Encryption state
-  encryptionDialog: { visible: boolean; mode: 'unlock' | 'encrypt' | 'remove'; notePath: string } | null;
+  encryptionDialog: { visible: boolean; mode: 'unlock' | 'encrypt' | 'remove'; notePath: string; requestId?: number } | null;
   activeEncryptionPassword: string | null; // password for currently open encrypted note
 
   // Temporary file state
   isTemporaryFile: boolean;
-  openTemporaryFile: (path: string) => Promise<void>;
+  openTemporaryFile: (path: string, initialViewMode?: ViewMode) => Promise<number | null>;
+  /** Accepted open identity; a later intent (including the same path) invalidates it. */
+  isCurrentOpen: (requestId: number) => boolean;
 
   loadProjects: (rootPath: string) => Promise<void>;
   loadNotes: (rootPath: string) => Promise<void>;
   loadNotesInFolder: (folderPath: string, rootPath: string) => Promise<void>;
-  selectNote: (note: NoteMetadata) => Promise<void>;
+  selectNote: (note: NoteMetadata) => Promise<number | null>;
   closeTab: (path: string) => Promise<void>;
   switchTab: (path: string) => Promise<void>;
   closeAllTabs: () => Promise<void>;
@@ -116,9 +200,29 @@ interface NotesState {
   closeRightTabs: (path: string) => Promise<void>;
   reloadOpenTabs: (changedPaths: string[]) => Promise<void>;
   updateContent: (content: string, rootPath: string) => void;
-  saveCurrentNote: () => Promise<void>;
+  saveCurrentNote: () => Promise<boolean>;
+  saveDocument: (path: string, identity: number) => Promise<boolean>;
+  saveDocumentCopy: (path: string, identity: number, targetPath: string) => Promise<boolean>;
+  discardDocument: (path: string, identity: number, expectedRevision?: number) => boolean;
+  runDocumentWork: (path: string, identity: number, key: string, run: () => Promise<void>, draft?: string) => Promise<boolean>;
+  waitDocumentWork: (path: string, prefix: string) => Promise<boolean>;
+  retryDocumentWork: (path: string, prefix: string) => Promise<boolean>;
+  getDocumentWork: (path: string, prefix: string) => DocumentWorkSnapshot | null;
+  /** Drain all dirty/in-flight sessions, rechecking edits made while waiting. False retains drafts. */
+  flushPendingSaves: () => Promise<boolean>;
+  /** Reserve source/destinations atomically; drain before sealing edits. Accepted work drains through close; new work is rejected during close. */
+  withDocumentPathChange: (path: string, directory: boolean, change: () => Promise<void>, destinations?: DocumentPathScope[], options?: { preserveOpenRequest?: number; preserveDialog?: boolean }) => Promise<boolean>;
+  deleteDocument: (path: string, directory?: boolean) => Promise<boolean>;
+  changeDocumentEncryption: (path: string, password: string, enabled: boolean) => Promise<boolean>;
+  createDocument: (folder: string, title: string, content?: string, activate?: boolean) => Promise<{ note: NoteMetadata; requestId: number | null } | null>;
+  /** Snapshot only; null means no loaded session. Passwords/queues are never exposed. */
+  getDocumentSession: (path: string) => DocumentSessionSnapshot | null;
+  /** Opaque monotonic token. Changes on edits, reloads, rename and reopen (not on save). */
+  getDocumentRevision: (path: string) => number | null;
+  /** CAS edit, including inactive documents. False for stale/missing/PDF; no side effects on rejection. */
+  updateDocumentContent: (path: string, content: string, expectedRevision: number) => boolean;
   setSearchQuery: (query: string, rootPath: string) => Promise<void>;
-  setActiveFolder: (folder: string | null, rootPath: string) => Promise<void>;
+  setActiveFolder: (folder: string | null, rootPath: string, requestId?: number) => Promise<void>;
   setSortMode: (mode: SortMode) => void;
   toggleSortDirection: () => void;
   refreshNotes: (rootPath: string) => Promise<void>;
@@ -127,13 +231,11 @@ interface NotesState {
   registerCreatedNote: (note: NoteMetadata) => void;
   setNotesFromCache: (loaded: NoteMetadata[]) => void;
   mergeProjectChunk: (project: Project) => void;
-  markRecentWrite: (path: string) => void;
-  consumeRecentWrite: (path: string) => boolean;
   duplicateNote: (rootPath: string) => Promise<void>;
   loadCustomSortOrder: (rootPath: string, folder: string | null) => Promise<void>;
   applyCustomSortOrder: (rootPath: string, folder: string | null, noteIds: string[]) => Promise<void>;
   setEncryptionDialog: (dialog: NotesState['encryptionDialog']) => void;
-  onNoteUnlocked: (content: string, password: string) => void;
+  onNoteUnlocked: (notePath: string, snapshot: NoteContent, password: string, requestId: number) => boolean;
   clearEncryptionPassword: () => void;
 
   // Tab state
@@ -149,19 +251,318 @@ interface NotesState {
 }
 
 export const useNotesStore = create<NotesState>((set, get) => {
-  // （私有）把 activeContent/isDirty 同步回活动标签缓存。
-  // updateContent 不再每键更新 openTabs（避免整个数组引用每键变化、
-  // 所有订阅 openTabs 的组件每键重渲染），改在切标签/关标签/外部重载前调用
-  const syncActiveTab = () => {
-    const s = get();
-    if (!s.activeTabPath) return;
-    const tab = s.openTabs.find(t => t.path === s.activeTabPath);
-    if (tab && tab.content === s.activeContent && tab.isDirty === s.isDirty) return;
-    set({
-      openTabs: s.openTabs.map(t =>
-        t.path === s.activeTabPath ? { ...t, content: s.activeContent, isDirty: s.isDirty } : t
-      ),
+  // The Map owns bodies/revisions/queues. Store fields and tabs are UI projections.
+  const sessions = new Map<string, DocumentSession>();
+  const openingReads = new Map<string, Promise<NoteContent>>();
+  const pathGuards = new Set<{ path: string; directory: boolean; sealed: boolean }>();
+  const pathOperations = new Set<Promise<boolean>>();
+  const inScope = (path: string, scope: { path: string; directory: boolean }) => {
+    const key = documentKey(path), root = documentKey(scope.path).replace(/\/$/, '');
+    return key === root || (scope.directory && key.startsWith(root + '/'));
+  };
+  let revisionClock = 0;
+  let navigationGeneration = 0;
+  let folderGeneration = 0;
+  let projectsGeneration = 0, notesGeneration = 0;
+  let searchGeneration = 0;
+  let searchSession: Promise<string> | null = null;
+  const getSearchSession = () => {
+    if (searchSession === null) {
+      const pending = startSearchSession();
+      searchSession = pending;
+      void pending.catch(() => { if (searchSession === pending) searchSession = null; });
+    }
+    return searchSession;
+  };
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let searching = false;
+  let queuedSearch: { generation: number; root: string; query: string; extras: string[]; resolve: () => void } | null = null;
+  const runSearch = async () => {
+    if (searching || searchTimer !== null || !queuedSearch) return;
+    const request = queuedSearch;
+    queuedSearch = null;
+    searching = true;
+    try {
+      const sessionId = await getSearchSession();
+      if (request.generation !== searchGeneration) return;
+      const results = await searchNotes(request.root, request.query, request.extras, sessionId, request.generation);
+      if (request.generation === searchGeneration) set({ searchResults: results, searchStatus: 'idle', searchError: null });
+    } catch (error) {
+      if (request.generation === searchGeneration) set({ searchStatus: 'error', searchError: String(error) });
+    } finally {
+      searching = false;
+      request.resolve();
+      void runSearch();
+    }
+  };
+  let pendingOpen: { note: NoteMetadata; temporary: boolean; requestId: number; viewMode?: ViewMode } | null = null;
+  const findSession = (path: string | null) => path ? sessions.get(documentKey(path)) : undefined;
+  const isLive = (session: DocumentSession) => findSession(session.note.path) === session;
+  const isRecovering = (path: string) => {
+    const key = documentKey(path);
+    return get().recoveryPaths.some(root => key === root || key.startsWith(root + '/'));
+  };
+  const isWritable = (session?: DocumentSession) => !!session && isLive(session) &&
+    get().closing !== 'destroying' && !isPdfPath(session.note.path) && !isRecovering(session.note.path) &&
+    ![...pathGuards].some(g => g.sealed && inScope(session.note.path, g));
+  const publishReadOnly = () => set({ activeDocumentReadOnly: !isWritable(findSession(get().activeTabPath)) });
+  const waitForPathOperations = async () => {
+    while (pathOperations.size) await Promise.allSettled([...pathOperations]);
+  };
+  const hasPending = (session: DocumentSession) => dirty(session) || !!session.savePromise || session.work.size > 0;
+  const workError = (session: DocumentSession) => [...session.work.values()].find(work => work.error)?.error ?? null;
+  const statusOf = (session: DocumentSession): DocumentSaveStatus => session.saveStatus === 'error' || workError(session)
+    ? 'error' : session.saveStatus === 'saving' || [...session.work.values()].some(work => work.promise) ? 'saving' : 'idle';
+  const errorOf = (session: DocumentSession) => session.saveError ?? workError(session);
+  const asTab = (session: DocumentSession): OpenTab => ({
+    path: session.note.path, note: session.note,
+    get content() { return session.content; },
+    isDirty: dirty(session) || session.work.size > 0, viewMode: session.viewMode,
+    saveStatus: statusOf(session), saveError: errorOf(session),
+  });
+  const activeFields = (session?: DocumentSession): Partial<NotesState> => ({
+    activeNote: session?.note ?? null,
+    activeTabPath: session?.note.path ?? null,
+    activeContent: session?.content ?? '',
+    isDirty: session ? dirty(session) || session.work.size > 0 : false,
+    activeEncryptionPassword: session?.password ?? null,
+    isTemporaryFile: session?.temporary ?? false,
+    activeDocumentReadOnly: !isWritable(session),
+  });
+  const publish = (session: DocumentSession) => {
+    if (!isLive(session)) return;
+    const state = get();
+    const tab = state.openTabs.find(t => documentKey(t.path) === documentKey(session.note.path));
+    const changes: Partial<NotesState> = {};
+    // No array allocation for subsequent keystrokes while already dirty.
+    if (tab && (tab.isDirty !== (dirty(session) || session.work.size > 0) || tab.note !== session.note ||
+        tab.viewMode !== session.viewMode || tab.saveStatus !== statusOf(session) || tab.saveError !== errorOf(session))) {
+      changes.openTabs = state.openTabs.map(t => t === tab ? asTab(session) : t);
+    }
+    if (findSession(state.activeTabPath) === session) Object.assign(changes, activeFields(session));
+    if (Object.keys(changes).length) set(changes);
+  };
+  const activate = (session?: DocumentSession, openTabs = get().openTabs) => {
+    set({ ...activeFields(session), openTabs, isLoading: false });
+    if (session) useEditorStore.getState().setViewMode(session.viewMode);
+  };
+  const cancelTimer = (session: DocumentSession) => {
+    if (session.timer !== null) clearTimeout(session.timer);
+    session.timer = null;
+  };
+  const saveSession = (session: DocumentSession): Promise<boolean> => {
+    cancelTimer(session);
+    if (session.savePromise) return session.savePromise;
+    if (!isLive(session) || !dirty(session)) return Promise.resolve(true);
+    // Install the shared promise before any notification/bridge call can reenter.
+    session.savePromise = Promise.resolve().then(async () => {
+      try {
+        while (isLive(session) && dirty(session)) {
+          if (isRecovering(session.note.path)) throw new Error('文档待恢复，暂不可保存 / Document recovery is pending');
+          cancelTimer(session);
+          const { note, content, revision, pathGeneration, password } = session;
+          if (isPdfPath(note.path)) throw new Error('PDF is read-only');
+          if ((note.is_encrypted || encryptedPath(note.path)) && !password) {
+            throw new Error('Encrypted document requires its password / 加密笔记缺少密码');
+          }
+          session.saveStatus = 'saving';
+          session.saveError = null;
+          publish(session);
+          const { line_ending } = useSettingsStore.getState().config;
+          const body = line_ending === 'crlf' ? content.replace(/(?<!\r)\n/g, '\r\n') : content.replace(/\r\n/g, '\n');
+          const started = performance.now();
+          const savedVersion = note.is_encrypted || encryptedPath(note.path)
+            ? await saveEncryptedNote(note.path, body, password!, session.diskVersion)
+            : await writeNote(note.path, body, session.diskVersion);
+          const elapsed = performance.now() - started;
+          if (elapsed > 100) perfReport('save-note', elapsed, `len=${body.length}`);
+          // Only acknowledge this revision at this path, never the newer draft.
+          if (session.pathGeneration === pathGeneration) { session.savedRevision = revision; session.diskVersion = savedVersion; }
+          publish(session);
+        }
+        session.saveStatus = 'idle';
+        session.saveError = null;
+        return true;
+      } catch (error) {
+        session.saveStatus = 'error';
+        session.saveError = String(error);
+        warnDocument(`保存失败 / Save failed: ${session.note.title} — ${session.saveError}`);
+        return false;
+      } finally {
+        session.savePromise = null;
+        publish(session);
+      }
     });
+    return session.savePromise;
+  };
+  const startWork = (session: DocumentSession, work: DocumentWork): Promise<boolean> => {
+    if (work.promise) return work.promise;
+    work.error = null;
+    work.promise = Promise.resolve().then(async () => {
+      try {
+        if (isRecovering(session.note.path)) throw new Error('Document recovery is pending');
+        await work.run();
+        if (session.work.get(work.key) === work) session.work.delete(work.key);
+        if (isLive(session)) window.dispatchEvent(new CustomEvent('document-work-complete', {
+          detail: { path: session.note.path, identity: session.identity, key: work.key },
+        }));
+        return true;
+      } catch (error) {
+        work.error = String(error);
+        warnDocument(`附属内容保存失败 / Document operation failed: ${session.note.title} — ${work.error}`);
+        return false;
+      } finally {
+        work.promise = null;
+        publish(session);
+      }
+    });
+    publish(session);
+    return work.promise;
+  };
+  const saveDocument = (session: DocumentSession): Promise<boolean> => {
+    if (session.drainPromise) return session.drainPromise;
+    session.drainPromise = Promise.resolve().then(async () => {
+      try {
+        while (isLive(session)) {
+          const results = await Promise.all([...session.work.values()].map(work => startWork(session, work)));
+          if (results.some(ok => !ok) || !(await saveSession(session))) return false;
+          if (!hasPending(session)) return true;
+        }
+        return true;
+      } finally {
+        session.drainPromise = null;
+      }
+    });
+    return session.drainPromise;
+  };
+  const scheduleSave = (session: DocumentSession) => {
+    cancelTimer(session);
+    // Non-positive/invalid intervals disable debounce, not explicit/leave/exit saves.
+    const interval = useSettingsStore.getState().config.auto_save_interval;
+    if (!Number.isFinite(interval) || interval <= 0) return;
+    session.timer = setTimeout(() => {
+      session.timer = null;
+      void saveSession(session);
+    }, interval);
+  };
+  const editSession = (session: DocumentSession, content: string) => {
+    if (!isWritable(session)) return false;
+    if (session.content === content) return true;
+    session.content = content;
+    session.revision = ++revisionClock;
+    scheduleSave(session);
+    publish(session);
+    return true;
+  };
+  const handOff = (targetPath: string) => {
+    const current = findSession(get().activeTabPath);
+    if (!current) return;
+    current.viewMode = isPdfPath(current.note.path) ? 'preview' : useEditorStore.getState().viewMode;
+    publish(current);
+    if (documentKey(current.note.path) !== documentKey(targetPath) && dirty(current)) void saveSession(current);
+  };
+  const newSession = (note: NoteMetadata, content: string, diskVersion: string, temporary: boolean, viewMode?: ViewMode, password: string | null = null) => {
+    const revision = ++revisionClock;
+    const session: DocumentSession = {
+      identity: revision, note, content, diskVersion, revision, savedRevision: revision, password, temporary,
+      viewMode: isPdfPath(note.path) ? 'preview' : (viewMode ?? (content.trim() ? 'preview' : 'split')),
+      saveStatus: 'idle', saveError: null, savePromise: null, drainPromise: null, work: new Map(), timer: null,
+      reloadGeneration: 0, pathGeneration: 0,
+    };
+    sessions.set(documentKey(note.path), session);
+    return session;
+  };
+  const invalidateOpen = (dismissDialog = true) => {
+    ++navigationGeneration;
+    // Reopening a cancelled target must start a new read, not reuse its old body.
+    if (pendingOpen) openingReads.delete(documentKey(pendingOpen.note.path));
+    pendingOpen = null;
+    set({ isLoading: false, encryptionDialog: dismissDialog ? null : get().encryptionDialog });
+  };
+  const openDocument = async (note: NoteMetadata, temporary = false, viewMode?: ViewMode, intent?: number): Promise<number | null> => {
+    if (get().closing || (intent !== undefined && !get().isCurrentOpen(intent)) || [...pathGuards].some(g => inScope(note.path, g))) return null;
+    const requestId = intent ?? ++navigationGeneration;
+    pendingOpen = { note, temporary, requestId, viewMode };
+    set({ encryptionDialog: null });
+    handOff(note.path);
+    const existing = findSession(note.path);
+    if (existing) {
+      pendingOpen = null;
+      activate(existing);
+      return requestId;
+    }
+    if (note.is_encrypted || encryptedPath(note.path)) {
+      set({ isLoading: false, encryptionDialog: { visible: true, mode: 'unlock', notePath: note.path, requestId } });
+      return requestId;
+    }
+    set({ isLoading: true });
+    const key = documentKey(note.path);
+    let read = openingReads.get(key);
+    if (!read) {
+      read = isPdfPath(note.path) ? Promise.resolve({ id: note.path, content: '', disk_version: '' }) : readNote(note.path);
+      openingReads.set(key, read);
+    }
+    try {
+      const started = performance.now();
+      const result = await read;
+      if (!get().isCurrentOpen(requestId) || pendingOpen?.requestId !== requestId) return null;
+      const elapsed = performance.now() - started;
+      if (elapsed > 100) perfReport('read-note', elapsed, `len=${result.content.length}`);
+      pendingOpen = null;
+      // The outgoing document may have received more edits during this read.
+      handOff(note.path);
+      const session = newSession(note, result.content, result.disk_version, temporary, viewMode);
+      activate(session, [...get().openTabs, asTab(session)]);
+      return requestId;
+    } catch (error) {
+      if (!get().isCurrentOpen(requestId)) return null;
+      pendingOpen = null;
+      set({ isLoading: false });
+      warnDocument(`打开失败 / Open failed: ${note.title} — ${String(error)}`);
+      return null;
+    } finally {
+      if (openingReads.get(key) === read) openingReads.delete(key);
+    }
+  };
+  const removeSession = (session: DocumentSession) => {
+    if (!isLive(session)) return;
+    const state = get();
+    const index = state.openTabs.findIndex(t => documentKey(t.path) === documentKey(session.note.path));
+    const wasActive = findSession(state.activeTabPath) === session;
+    const tabs = state.openTabs.filter((_, i) => i !== index);
+    cancelTimer(session);
+    sessions.delete(documentKey(session.note.path));
+    session.password = null;
+    if (wasActive) activate(findSession(tabs[Math.min(index, tabs.length - 1)]?.path ?? null), tabs);
+    else set({ openTabs: tabs });
+  };
+  const closeDocuments = async (paths: string[]) => {
+    for (const path of paths) openingReads.delete(documentKey(path));
+    const intentPath = pendingOpen?.note.path ?? get().activeTabPath;
+    if (intentPath && paths.some(path => documentKey(path) === documentKey(intentPath))) invalidateOpen();
+    // Capture identities, not a tab-array snapshot; newly opened sessions are untouched.
+    const targets = paths.map(findSession).filter((s): s is DocumentSession => !!s);
+    await waitForPathOperations();
+    await Promise.all(targets.map(async session => {
+      while (isLive(session)) {
+        if (!(await saveDocument(session))) return;
+        await waitForPathOperations();
+        // Another edit can arrive between promise resolution and this continuation.
+        if (pathOperations.size || hasPending(session)) continue;
+        removeSession(session);
+        return;
+      }
+    }));
+  };
+  const migrateSession = (session: DocumentSession, note: NoteMetadata) => {
+    const wasDirty = dirty(session);
+    sessions.delete(documentKey(session.note.path));
+    session.note = note;
+    ++session.pathGeneration;
+    ++session.reloadGeneration;
+    session.revision = ++revisionClock;
+    if (!wasDirty) session.savedRevision = session.revision;
+    sessions.set(documentKey(note.path), session);
   };
 
   return {
@@ -171,11 +572,30 @@ export const useNotesStore = create<NotesState>((set, get) => {
   activeContent: '',
   activeFolder: null,
   searchQuery: '',
+  searchResults: [],
+  searchStatus: 'idle',
+  searchError: null,
   sortMode: 'modified',
   sortDirection: 'desc',
   isLoading: false,
   isDirty: false,
-  saveTimer: null,
+  activeDocumentReadOnly: true,
+  recoveryPaths: [],
+  setRecoveryPaths: (paths) => {
+    set({ recoveryPaths: [...new Set(paths.map(documentKey))] });
+    publishReadOnly();
+  },
+  isDocumentWritable: (path) => isWritable(findSession(path)),
+  closing: null,
+  setClosing: (phase) => {
+    set({ closing: phase });
+    publishReadOnly();
+    if (phase === 'draining') {
+      invalidateOpen();
+      openingReads.clear();
+      for (const session of sessions.values()) ++session.reloadGeneration;
+    }
+  },
 
   customSortOrder: [],
 
@@ -200,14 +620,24 @@ export const useNotesStore = create<NotesState>((set, get) => {
   clearExpandedFolders: () => set({ expandedFolders: [] }),
 
   loadProjects: async (rootPath) => {
+    const generation = ++projectsGeneration;
+    const { config, storageRevision } = useSettingsStore.getState();
+    const pending = getProjects(rootPath, config.extra_folders);
+    const scanId = getScanId(pending);
+    const isCurrent = () => {
+      const current = useSettingsStore.getState();
+      return generation === projectsGeneration && storageRevision === current.storageRevision && isCurrentScan(scanId, 'projects', current.config.storage_path, current.config.extra_folders);
+    };
+    const roots = [config.storage_path, ...config.extra_folders].filter(Boolean);
+    set(state => ({ projects: state.projects.filter(project => roots.some(root => isPathWithin(project.path, root))) }));
     // 扫描很慢（大库 + 额外文件夹可达十几秒）：先记下调用时已存在的目录，
     // 扫描期间本地新增的目录不能被晚到的权威结果抹掉
     const beforePaths = new Set<string>();
     collectProjectPaths(get().projects, beforePaths);
     try {
-      const config = useSettingsStore.getState().config;
-      const callFolders = (config.extra_folders || []).map(p => p.replace(/\\/g, '/').toLowerCase());
-      const projects = await getProjects(rootPath, config.extra_folders || []);
+      const callFolders = config.extra_folders.map(pathIdentity);
+      const projects = await pending;
+      if (!isCurrent()) return;
       // 迟到保护：扫描期间配置变更时，权威结果须按当前配置裁剪——
       // 已移除文件夹的行过滤（避免移除行复活），增量导入的文件夹行按前缀保留（避免被晚到结果抹掉）
       set(s => {
@@ -245,473 +675,365 @@ export const useNotesStore = create<NotesState>((set, get) => {
         return { projects: result };
       });
     } catch (e) {
-      console.error('Failed to load projects:', e);
+      if (isCurrent()) warnDocument(`扫描未完成，已保留现有目录 / Scan incomplete; existing folders were kept: ${String(e)}`);
     }
   },
 
   loadNotes: async (rootPath) => {
-    set({ isLoading: true });
+    const generation = ++notesGeneration;
+    const { config, storageRevision } = useSettingsStore.getState();
+    const roots = [config.storage_path, ...config.extra_folders].filter(Boolean);
+    const beforePaths = new Set(get().notes.map(note => pathIdentity(note.path)));
+    set(state => ({
+      isLoading: true,
+      notes: state.notes.filter(note => roots.some(root => isPathWithin(note.path, root))),
+      activeFolder: state.activeFolder && roots.some(root => isPathWithin(state.activeFolder!, root)) ? state.activeFolder : null,
+    }));
+    const pending = getAllNotes(rootPath, config.extra_folders);
+    const scanId = getScanId(pending);
+    const isCurrent = () => {
+      const current = useSettingsStore.getState();
+      return generation === notesGeneration && storageRevision === current.storageRevision && isCurrentScan(scanId, 'notes', current.config.storage_path, current.config.extra_folders);
+    };
+    const t0 = performance.now();
     try {
-      const config = useSettingsStore.getState().config;
-      const t0 = performance.now();
-      const notes = await getAllNotes(rootPath, config.extra_folders || []);
-      // 全量目录扫描超过 200ms 记录（启动/全量刷新链路）
+      const loaded = await pending;
+      if (!isCurrent()) return;
+      const current = useSettingsStore.getState().config;
+      const currentRoots = [current.storage_path, ...current.extra_folders].filter(Boolean);
+      const notes = loaded.filter(note => currentRoots.some(root => isPathWithin(note.path, root)));
+      const incoming = new Set(notes.map(note => pathIdentity(note.path)));
+      const added = current.extra_folders.filter(folder => !config.extra_folders.some(old => pathIdentity(old) === pathIdentity(folder)));
+      const late = get().notes.filter(note => currentRoots.some(root => isPathWithin(note.path, root)) && !incoming.has(pathIdentity(note.path)) && (!beforePaths.has(pathIdentity(note.path)) || added.some(root => isPathWithin(note.path, root))));
+      const merged = [...notes, ...late];
       const dt = performance.now() - t0;
-      if (dt > 200) perfReport('scan-notes', dt, `count=${notes.length}`);
-      set({ notes, isLoading: false });
+      if (dt > 200) perfReport('scan-notes', dt, `count=${merged.length}`);
+      get().setNotesFromCache(merged);
     } catch (e) {
-      console.error('Failed to load notes:', e);
-      set({ isLoading: false });
+      if (isCurrent()) warnDocument(`扫描未完成，已保留现有笔记 / Scan incomplete; existing notes were kept: ${String(e)}`);
+    } finally {
+      if (isCurrent()) set({ isLoading: false });
     }
   },
 
   loadNotesInFolder: async (folderPath, rootPath) => {
+    const generation = ++folderGeneration;
+    const revision = useSettingsStore.getState().storageRevision;
+    const isCurrent = () => {
+      const current = useSettingsStore.getState();
+      return generation === folderGeneration && revision === current.storageRevision && pathIdentity(rootPath) === pathIdentity(current.config.storage_path) && get().activeFolder === folderPath;
+    };
     set({ isLoading: true });
     try {
       const notes = await getNotesInFolder(folderPath, rootPath);
-      set({ notes, isLoading: false });
+      if (isCurrent()) set({ notes });
     } catch (e) {
-      console.error('Failed to load notes in folder:', e);
-      set({ isLoading: false });
+      if (isCurrent()) warnDocument(`文件夹刷新失败 / Folder refresh failed: ${String(e)}`);
+    } finally {
+      if (isCurrent()) set({ isLoading: false });
     }
   },
 
-  selectNote: async (note) => {
-    // Save current tab if dirty
-    const before = get();
-    if (before.isDirty && before.activeNote) {
-      await get().saveCurrentNote();
-    }
-    syncActiveTab();
-
-    // Check if note is already open in a tab
-    const state = get();
-    const existingTab = state.openTabs.find(t => t.path === note.path);
-    if (existingTab) {
-      // Switch to existing tab
-      set({
-        activeNote: existingTab.note,
-        activeContent: existingTab.content,
-        activeTabPath: existingTab.path,
-        isDirty: existingTab.isDirty,
-        isLoading: false,
-        activeEncryptionPassword: existingTab.encryptionPassword || null,
-        isTemporaryFile: false,
-      });
-      useEditorStore.getState().setViewMode(existingTab.viewMode);
-      return;
-    }
-
-    set({ isLoading: true, activeEncryptionPassword: null, isTemporaryFile: false });
-
-    // If encrypted, show unlock dialog instead of loading content
-    if (note.is_encrypted) {
-      set({ activeNote: note, activeContent: '', isLoading: false, isDirty: false });
-      set({
-        encryptionDialog: { visible: true, mode: 'unlock', notePath: note.path },
-      });
-      return;
-    }
-
-    try {
-      const isPdf = isPdfPath(note.path);
-      let content = '';
-      if (!isPdf) {
-        const t0 = performance.now();
-        const result = await readNote(note.path);
-        // 读盘超过 100ms 记录（切换笔记卡顿定位）
-        const readMs = performance.now() - t0;
-        if (readMs > 100) perfReport('read-note', readMs, `len=${result.content.length}`);
-        content = result.content;
-      }
-      // PDF 只读预览：不读文本、不进编辑视图
-      const isEmpty = !isPdf && !content.trim();
-      const viewMode: ViewMode = isEmpty ? 'split' : 'preview';
-
-      // Create new tab
-      const newTab: OpenTab = {
-        path: note.path,
-        note,
-        content,
-        isDirty: false,
-        viewMode,
-      };
-
-      // Set activeNote + activeContent atomically to avoid blank first render
-      set((s) => ({
-        activeNote: note,
-        openTabs: [...s.openTabs, newTab],
-        activeTabPath: note.path,
-        activeContent: content,
-        isLoading: false,
-        isDirty: false,
-      }));
-      useEditorStore.getState().setViewMode(viewMode);
-    } catch (e) {
-      console.error('Failed to read note:', e);
-      set({ activeNote: note, activeContent: '', isLoading: false });
-      useEditorStore.getState().setViewMode('split');
-    }
-  },
+  selectNote: (note) => openDocument(note),
+  isCurrentOpen: (requestId) => !get().closing && navigationGeneration === requestId,
 
   switchTab: async (path) => {
-    const before = get();
-    // Save current tab if dirty
-    if (before.isDirty && before.activeNote) {
-      await get().saveCurrentNote();
-    }
-    syncActiveTab();
-
-    const state = get();
-    const tab = state.openTabs.find(t => t.path === path);
-    if (!tab) return;
-
-    // Save current viewMode to old tab before switching
-    const currentViewMode = useEditorStore.getState().viewMode;
-    const updatedTabs = state.openTabs.map(t =>
-      t.path === state.activeTabPath ? { ...t, viewMode: currentViewMode } : t
-    );
-
-    set({
-      openTabs: updatedTabs,
-      activeNote: tab.note,
-      activeContent: tab.content,
-      activeTabPath: tab.path,
-      isDirty: tab.isDirty,
-      isLoading: false,
-      activeEncryptionPassword: tab.encryptionPassword || null,
-      isTemporaryFile: false,
-    });
-    useEditorStore.getState().setViewMode(tab.viewMode);
+    const session = findSession(path);
+    if (!session) return;
+    await openDocument(session.note, session.temporary);
   },
 
-  closeTab: async (path) => {
-    syncActiveTab();
-    const state = get();
-    const tab = state.openTabs.find(t => t.path === path);
-
-    // Save dirty tab before closing
-    if (tab && tab.isDirty) {
-      try {
-        const { config } = useSettingsStore.getState();
-        let contentToSave = tab.content;
-        if (config.line_ending === 'crlf') {
-          contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
-        } else {
-          contentToSave = contentToSave.replace(/\r\n/g, '\n');
-        }
-        if (tab.note.is_encrypted && tab.encryptionPassword) {
-          await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
-        } else {
-          await writeNote(tab.path, contentToSave);
-        }
-      } catch (e) {
-        console.error('Failed to save dirty tab on close:', e);
-      }
-    }
-
-    const newTabs = state.openTabs.filter(t => t.path !== path);
-
-    if (state.activeTabPath === path) {
-      if (newTabs.length === 0) {
-        // No tabs left
-        set({
-          openTabs: [],
-          activeTabPath: null,
-          activeNote: null,
-          activeContent: '',
-          isDirty: false,
-          isLoading: false,
-        });
-      } else {
-        // Switch to adjacent tab
-        const oldIndex = state.openTabs.findIndex(t => t.path === path);
-        const newIndex = Math.min(oldIndex, newTabs.length - 1);
-        const nextTab = newTabs[newIndex];
-        set({
-          openTabs: newTabs,
-          activeTabPath: nextTab.path,
-          activeNote: nextTab.note,
-          activeContent: nextTab.content,
-          isDirty: nextTab.isDirty,
-          isLoading: false,
-          activeEncryptionPassword: nextTab.encryptionPassword || null,
-        });
-        useEditorStore.getState().setViewMode(nextTab.viewMode);
-      }
-    } else {
-      set({ openTabs: newTabs });
-    }
-  },
+  closeTab: (path) => closeDocuments([path]),
 
   closeAllTabs: async () => {
-    syncActiveTab();
-    const state = get();
-    // Save all dirty tabs
-    for (const tab of state.openTabs) {
-      if (tab.isDirty) {
-        try {
-          const { config } = useSettingsStore.getState();
-          let contentToSave = tab.content;
-          if (config.line_ending === 'crlf') {
-            contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
-          } else {
-            contentToSave = contentToSave.replace(/\r\n/g, '\n');
-          }
-          if (tab.note.is_encrypted && tab.encryptionPassword) {
-            await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
-          } else {
-            await writeNote(tab.path, contentToSave);
-          }
-        } catch (e) {
-          console.error('Failed to save dirty tab:', e);
-        }
-      }
-    }
-    set({
-      openTabs: [],
-      activeTabPath: null,
-      activeNote: null,
-      activeContent: '',
-      isDirty: false,
-      isLoading: false,
-    });
+    invalidateOpen();
+    openingReads.clear();
+    await closeDocuments(get().openTabs.map(t => t.path));
   },
 
   closeOtherTabs: async (path) => {
-    syncActiveTab();
-    const state = get();
-    const keepTab = state.openTabs.find(t => t.path === path);
-    if (!keepTab) return;
-    // Save dirty tabs that are being closed
-    for (const tab of state.openTabs) {
-      if (tab.path !== path && tab.isDirty) {
-        try {
-          const { config } = useSettingsStore.getState();
-          let contentToSave = tab.content;
-          if (config.line_ending === 'crlf') {
-            contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
-          } else {
-            contentToSave = contentToSave.replace(/\r\n/g, '\n');
-          }
-          if (tab.note.is_encrypted && tab.encryptionPassword) {
-            await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
-          } else {
-            await writeNote(tab.path, contentToSave);
-          }
-        } catch (e) {
-          console.error('Failed to save dirty tab:', e);
-        }
-      }
-    }
-    set({
-      openTabs: [keepTab],
-      activeTabPath: keepTab.path,
-      activeNote: keepTab.note,
-      activeContent: keepTab.content,
-      isDirty: keepTab.isDirty,
-      isLoading: false,
-    });
-    useEditorStore.getState().setViewMode(keepTab.viewMode);
+    if (!findSession(path)) return;
+    await closeDocuments(get().openTabs.filter(t => documentKey(t.path) !== documentKey(path)).map(t => t.path));
   },
 
   closeLeftTabs: async (path) => {
-    syncActiveTab();
-    const state = get();
-    const idx = state.openTabs.findIndex(t => t.path === path);
-    if (idx <= 0) return;
-    const toClose = state.openTabs.slice(0, idx);
-    for (const tab of toClose) {
-      if (tab.isDirty) {
-        try {
-          const { config } = useSettingsStore.getState();
-          let contentToSave = tab.content;
-          if (config.line_ending === 'crlf') {
-            contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
-          } else {
-            contentToSave = contentToSave.replace(/\r\n/g, '\n');
-          }
-          if (tab.note.is_encrypted && tab.encryptionPassword) {
-            await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
-          } else {
-            await writeNote(tab.path, contentToSave);
-          }
-        } catch (e) { console.error('Failed to save dirty tab:', e); }
-      }
-    }
-    const remaining = state.openTabs.slice(idx);
-    // If active tab was closed, switch to the target tab
-    const activeInRemaining = remaining.find(t => t.path === state.activeTabPath) || remaining[0];
-    set({
-      openTabs: remaining,
-      activeTabPath: activeInRemaining?.path ?? null,
-      activeNote: activeInRemaining?.note ?? null,
-      activeContent: activeInRemaining?.content ?? '',
-      isDirty: activeInRemaining?.isDirty ?? false,
-      isLoading: false,
-    });
-    if (activeInRemaining) {
-      useEditorStore.getState().setViewMode(activeInRemaining.viewMode);
-    }
+    const tabs = get().openTabs;
+    const index = tabs.findIndex(t => documentKey(t.path) === documentKey(path));
+    if (index > 0) await closeDocuments(tabs.slice(0, index).map(t => t.path));
   },
 
   closeRightTabs: async (path) => {
-    syncActiveTab();
-    const state = get();
-    const idx = state.openTabs.findIndex(t => t.path === path);
-    if (idx < 0 || idx >= state.openTabs.length - 1) return;
-    const toClose = state.openTabs.slice(idx + 1);
-    for (const tab of toClose) {
-      if (tab.isDirty) {
-        try {
-          const { config } = useSettingsStore.getState();
-          let contentToSave = tab.content;
-          if (config.line_ending === 'crlf') {
-            contentToSave = contentToSave.replace(/(?<!\r)\n/g, '\r\n');
-          } else {
-            contentToSave = contentToSave.replace(/\r\n/g, '\n');
-          }
-          if (tab.note.is_encrypted && tab.encryptionPassword) {
-            await saveEncryptedNote(tab.path, contentToSave, tab.encryptionPassword);
-          } else {
-            await writeNote(tab.path, contentToSave);
-          }
-        } catch (e) { console.error('Failed to save dirty tab:', e); }
-      }
-    }
-    const remaining = state.openTabs.slice(0, idx + 1);
-    const activeInRemaining = remaining.find(t => t.path === state.activeTabPath) || remaining[remaining.length - 1];
-    set({
-      openTabs: remaining,
-      activeTabPath: activeInRemaining?.path ?? null,
-      activeNote: activeInRemaining?.note ?? null,
-      activeContent: activeInRemaining?.content ?? '',
-      isDirty: activeInRemaining?.isDirty ?? false,
-      isLoading: false,
-    });
-    if (activeInRemaining) {
-      useEditorStore.getState().setViewMode(activeInRemaining.viewMode);
-    }
+    const tabs = get().openTabs;
+    const index = tabs.findIndex(t => documentKey(t.path) === documentKey(path));
+    if (index >= 0) await closeDocuments(tabs.slice(index + 1).map(t => t.path));
   },
 
   reloadOpenTabs: async (changedPaths) => {
-    syncActiveTab();
-    const state = get();
-    const changedSet = new Set(changedPaths.map(p => p.replace(/\\/g, '/')));
-    let updatedTabs = [...state.openTabs];
-    let activeNeedsReload = false;
-
-    for (let i = 0; i < updatedTabs.length; i++) {
-      const tab = updatedTabs[i];
-      const normalizedPath = tab.path.replace(/\\/g, '/');
-      // Only reload if file was changed externally and tab is not dirty
-      // PDF 由 PdfViewer 自行加载，不经由文本内容重载
-      if (changedSet.has(normalizedPath) && !tab.isDirty && !isPdfPath(tab.path)) {
-        try {
-          const result = await readNote(tab.path);
-          updatedTabs[i] = { ...tab, content: result.content };
-          if (tab.path === state.activeTabPath) {
-            activeNeedsReload = true;
-          }
-        } catch (e) {
-          // File might have been deleted
-          console.warn('Failed to reload tab:', tab.path, e);
-        }
-      }
-    }
-
-    const updates: any = { openTabs: updatedTabs };
-    if (activeNeedsReload) {
-      const activeTab = updatedTabs.find(t => t.path === state.activeTabPath);
-      if (activeTab) {
-        updates.activeContent = activeTab.content;
-      }
-    }
-    set(updates);
-  },
-
-  updateContent: (content, rootPath) => {
-    const state = get();
-    // 只更新 store 级字段；openTabs 缓存延迟到切换/关闭时同步，
-    // 避免每次按键都新建 openTabs 数组导致订阅方全部重渲染
-
-    // Debounced auto-save (1.5 seconds)
-    if (state.saveTimer) {
-      clearTimeout(state.saveTimer);
-    }
-    const timer = setTimeout(async () => {
-      await get().saveCurrentNote();
-    }, 1500);
-    // 合并为单次 set：避免每次按键两次通知全部订阅者
-    set({ activeContent: content, isDirty: true, saveTimer: timer });
-  },
-
-  saveCurrentNote: async () => {
-    const { activeNote, activeContent, isDirty, activeEncryptionPassword, activeTabPath } = get();
-    if (!activeNote || !isDirty) return;
-
-    try {
-      // Apply line ending conversion based on config
-      const { config } = useSettingsStore.getState();
-      let contentToSave = activeContent;
-      if (config.line_ending === 'crlf') {
-        contentToSave = activeContent.replace(/(?<!\r)\n/g, '\r\n');
-      } else {
-        contentToSave = activeContent.replace(/\r\n/g, '\n');
-      }
-
-      // 先标记自身写入，确保 watcher 回环事件到达时必被吞掉
-      get().markRecentWrite(activeNote.path);
-      const t0 = performance.now();
-      if (activeNote.is_encrypted && activeEncryptionPassword) {
-        // Save as encrypted
-        await saveEncryptedNote(activeNote.path, contentToSave, activeEncryptionPassword);
-      } else {
-        await writeNote(activeNote.path, contentToSave);
-      }
-      // 保存（含加密/写盘）超过 100ms 记录，用于定位保存引发的卡顿
-      const saveMs = performance.now() - t0;
-      if (saveMs > 100) perfReport('save-note', saveMs, `len=${contentToSave.length}`);
-
-      // Update dirty state in both store and tab
-      const updatedTabs = get().openTabs.map(t =>
-        t.path === activeTabPath ? { ...t, isDirty: false, content: activeContent } : t
-      );
-      set({ isDirty: false, openTabs: updatedTabs });
-    } catch (e) {
-      console.error('Failed to save note:', e);
-    }
-  },
-
-  setSearchQuery: async (query, rootPath) => {
-    set({ searchQuery: query });
-    if (query.trim()) {
+    if (get().closing) return;
+    const changed = new Set(changedPaths.map(documentKey));
+    await Promise.all([...sessions.values()].map(async session => {
+      const { note, revision, password } = session;
+      if (!changed.has(documentKey(note.path)) || dirty(session) || session.savePromise || isPdfPath(note.path) ||
+          [...pathGuards].some(g => inScope(note.path, g))) return;
+      const encrypted = note.is_encrypted || encryptedPath(note.path);
+      if (encrypted && !password) return;
+      const generation = ++session.reloadGeneration;
       try {
-        const notes = await searchNotes(rootPath, query);
-        set({ notes });
-      } catch (e) {
-        console.error('Failed to search:', e);
+        const snapshot = encrypted ? await decryptNote(note.path, password!) : await readNote(note.path);
+        if (!isLive(session) || session.revision !== revision || dirty(session) || session.savePromise || session.reloadGeneration !== generation) return;
+        session.diskVersion = snapshot.disk_version;
+        if (session.content === snapshot.content) return;
+        session.content = snapshot.content;
+        session.revision = ++revisionClock;
+        session.savedRevision = session.revision;
+        publish(session);
+      } catch (error) {
+        console.warn('Failed to reload tab:', note.path, error);
       }
-    } else {
-      const { activeFolder } = get();
-      if (activeFolder) {
-        await get().loadNotesInFolder(activeFolder, rootPath);
-      } else {
-        await get().loadNotes(rootPath);
-      }
+    }));
+  },
+
+  runDocumentWork: (path, identity, key, run, draft) => {
+    const session = findSession(path);
+    if (!session || session.identity !== identity || get().closing || !isWritable(session)) return Promise.resolve(false);
+    const existing = session.work.get(key);
+    if (existing?.promise) return existing.promise;
+    if (key.startsWith('annotation:') && [...session.work.values()].some(work => work.key.startsWith('annotation:') && work.key !== key && work.error)) {
+      warnDocument('请先重试之前未保存的批注 / Retry the previous annotation change first');
+      return Promise.resolve(false);
+    }
+    if (!existing && session.work.size >= 16) {
+      warnDocument('待完成操作过多，请稍后再试 / Too many pending document operations');
+      return Promise.resolve(false);
+    }
+    const work: DocumentWork = { key, run, draft, promise: null, error: null };
+    session.work.set(key, work);
+    return startWork(session, work);
+  },
+
+  getDocumentWork: (path, prefix) => {
+    const matches = [...(findSession(path)?.work.values() ?? [])].filter(work => work.key.startsWith(prefix));
+    const work = matches.find(work => work.error) ?? matches[0];
+    return work ? { key: work.key, pending: matches.some(work => !!work.promise), error: work.error, draft: work.draft } : null;
+  },
+
+  waitDocumentWork: async (path, prefix) => {
+    const session = findSession(path);
+    if (!session) return false;
+    for (;;) {
+      const work = [...session.work.values()].filter(work => work.key.startsWith(prefix));
+      const running = work.flatMap(work => work.promise ? [work.promise] : []);
+      if (!running.length) return isLive(session) && work.every(work => !work.error);
+      await Promise.all(running);
     }
   },
 
-  setActiveFolder: async (folder, rootPath) => {
-    set({ activeFolder: folder, searchQuery: '' });
-    if (folder) {
-      await get().loadNotesInFolder(folder, rootPath);
-    } else {
-      await get().loadNotes(rootPath);
+  retryDocumentWork: async (path, prefix) => {
+    const session = findSession(path);
+    if (!session) return false;
+    const work = [...session.work.values()].filter(work => work.key.startsWith(prefix));
+    return (await Promise.all(work.map(work => startWork(session, work)))).every(Boolean);
+  },
+
+  getDocumentSession: (path) => {
+    const session = findSession(path);
+    return session ? {
+      identity: session.identity, path: session.note.path, content: session.content,
+      revision: session.revision, savedRevision: session.savedRevision,
+      isDirty: dirty(session) || session.work.size > 0, saveStatus: statusOf(session), saveError: errorOf(session),
+      isTemporaryFile: session.temporary,
+    } : null;
+  },
+
+  getDocumentRevision: (path) => findSession(path)?.revision ?? null,
+
+  updateDocumentContent: (path, content, expectedRevision) => {
+    const session = findSession(path);
+    if (!session || session.revision !== expectedRevision) return false;
+    return editSession(session, content);
+  },
+
+  updateContent: (content, _rootPath) => {
+    const session = findSession(get().activeTabPath);
+    if (session) editSession(session, content);
+  },
+
+  saveCurrentNote: () => {
+    const session = findSession(get().activeTabPath);
+    return session ? saveDocument(session) : Promise.resolve(true);
+  },
+
+  saveDocument: (path, identity) => {
+    const session = findSession(path);
+    return session?.identity === identity ? saveDocument(session) : Promise.resolve(false);
+  },
+
+  saveDocumentCopy: async (path, identity, targetPath) => {
+    const session = findSession(path);
+    if (!session || session.identity !== identity || get().closing) return false;
+    await get().waitDocumentWork(path, '');
+    if (!isLive(session)) return false;
+    const { content, password, note } = session;
+    const draft = [...session.work.values()].find(work => work.key.startsWith('annotation:'))?.draft;
+    const intent = navigationGeneration;
+    return get().withDocumentPathChange(targetPath, false, async () => {
+      const snapshot = await saveDocumentCopy(note.path, targetPath, content, draft, password ?? undefined);
+      const now = new Date().toISOString();
+      const newNote = { ...note, id: snapshot.id, path: snapshot.id, title: snapshot.id.split(/[\\/]/).pop() ?? snapshot.id, folder: snapshot.id.slice(0, Math.max(snapshot.id.lastIndexOf('/'), snapshot.id.lastIndexOf('\\'))), created_at: now, modified_at: now, pinned: false };
+      const copy = newSession(newNote, snapshot.content, snapshot.disk_version, true, session.viewMode, password);
+      const tabs = [...get().openTabs, asTab(copy)];
+      if (intent === navigationGeneration) activate(copy, tabs);
+      else set({ openTabs: tabs });
+      get().registerCreatedNote(newNote);
+    });
+  },
+
+  discardDocument: (path, identity, expectedRevision) => {
+    const session = findSession(path);
+    if (!session || session.identity !== identity || (expectedRevision !== undefined && session.revision !== expectedRevision) ||
+        get().closing || session.savePromise || session.drainPromise || [...session.work.values()].some(work => work.promise) ||
+        [...pathGuards].some(guard => inScope(path, guard))) return false;
+    session.work.clear();
+    removeSession(session);
+    return true;
+  },
+
+  withDocumentPathChange: (path, directory, change, destinations = [], options) => {
+    const preserveOpenRequest = options?.preserveOpenRequest;
+    if (preserveOpenRequest !== undefined && (pendingOpen?.requestId !== preserveOpenRequest || documentKey(pendingOpen.note.path) !== documentKey(path))) return Promise.resolve(false);
+    const scopes = [{ path, directory }, ...destinations].map(s => ({ ...s, sealed: false }));
+    if (get().closing || scopes.some(s => [...pathGuards].some(g => inScope(s.path, g) || inScope(g.path, s)))) return Promise.resolve(false);
+    for (const scope of scopes) pathGuards.add(scope);
+    const affected = (p: string) => scopes.some(s => inScope(p, s));
+    const intentPath = pendingOpen?.note.path ?? get().activeTabPath;
+    if (intentPath && affected(intentPath) && preserveOpenRequest === undefined) invalidateOpen(options?.preserveDialog !== true);
+    for (const session of sessions.values()) if (affected(session.note.path)) ++session.reloadGeneration;
+    const operation = Promise.resolve().then(async () => {
+      try {
+        for (;;) {
+          const pending = [...sessions.values()].filter(s => affected(s.note.path) && hasPending(s));
+          if (!pending.length) break;
+          if ((await Promise.all(pending.map(saveDocument))).some(ok => !ok)) return false;
+        }
+        // Admission above rejects new work during close. Already accepted work
+        // (notably create's supplied body) belongs to the close drain, not cancellation.
+        for (const scope of scopes) scope.sealed = true;
+        publishReadOnly();
+        await change();
+        return true;
+      } finally {
+        for (const scope of scopes) pathGuards.delete(scope);
+        pathOperations.delete(operation);
+        publishReadOnly();
+      }
+    });
+    pathOperations.add(operation);
+    return operation;
+  },
+
+  deleteDocument: (path, directory = false) => get().withDocumentPathChange(path, directory, async () => {
+    if (directory) await deleteFolder(path);
+    else await deleteNote(path);
+    const scope = { path, directory };
+    for (const key of openingReads.keys()) if (inScope(key, scope)) openingReads.delete(key);
+    if (pendingOpen && inScope(pendingOpen.note.path, scope)) invalidateOpen();
+    for (const session of [...sessions.values()]) if (inScope(session.note.path, scope)) removeSession(session);
+  }),
+
+  changeDocumentEncryption: (path, password, enabled) => {
+    if (enabled === encryptedPath(path)) return Promise.resolve(false);
+    const target = enabled ? `${path}.encrypted` : path.slice(0, -'.encrypted'.length);
+    return get().withDocumentPathChange(path, false, async () => {
+      const session = findSession(path);
+      const snapshot = enabled ? await encryptNote(path, password, session?.diskVersion) : await removeEncryption(path, password, session?.diskVersion);
+      if (session) {
+        session.password = enabled ? password : null;
+        session.diskVersion = snapshot.disk_version;
+        session.note = { ...session.note, is_encrypted: enabled };
+      }
+      const newPath = snapshot.id;
+      get().applyNotePathChange(path, newPath, newPath.split(/[\\/]/).pop() ?? newPath);
+    }, [{ path: target, directory: false }], { preserveDialog: true });
+  },
+
+  createDocument: async (folder, title, content = '', shouldActivate = true) => {
+    if (get().closing) return null;
+    if (shouldActivate) invalidateOpen();
+    const intent = navigationGeneration;
+    const filename = /\.(md|markdown|txt|html|htm)$/.test(title) ? title : `${title}.md`;
+    let created: NoteMetadata | null = null;
+    const done = await get().withDocumentPathChange(`${folder}/${filename}`, false, async () => {
+      const note = await createNote(folder, title);
+      created = note;
+      if (content) {
+        const session = newSession(note, content, note.disk_version, false);
+        session.savedRevision = 0;
+        if (await saveSession(session)) sessions.delete(documentKey(note.path));
+        else set({ openTabs: [...get().openTabs, asTab(session)] });
+      }
+      get().registerCreatedNote(note);
+    });
+    if (!done || !created) return null;
+    const requestId = shouldActivate ? await openDocument(created, false, undefined, intent) : null;
+    return { note: created, requestId };
+  },
+
+  flushPendingSaves: async () => {
+    for (;;) {
+      await waitForPathOperations();
+      if (pathOperations.size) continue;
+      const pending = [...sessions.values()].filter(hasPending);
+      if (!pending.length) return true;
+      const results = await Promise.all(pending.map(saveDocument));
+      if (results.some(ok => !ok)) return false;
     }
-    // Load custom sort order for this folder
-    if (get().sortMode === 'custom') {
-      await get().loadCustomSortOrder(rootPath, folder);
+  },
+
+  setSearchQuery: (query, rootPath) => {
+    const generation = ++searchGeneration;
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    searchTimer = null;
+    queuedSearch?.resolve();
+    queuedSearch = null;
+    set({ searchQuery: query, searchResults: [], searchError: null, searchStatus: query.trim() ? 'loading' : 'idle' });
+    if (searchSession !== null) {
+      void searchSession.then(sessionId => invalidateSearch(sessionId, generation)).catch(error => {
+        const current = get();
+        if (generation === searchGeneration && (current.searchStatus === 'loading' || current.searchQuery.trim() === '')) {
+          set({ searchStatus: 'error', searchError: String(error) });
+        }
+      });
+    }
+    if (!query.trim()) return Promise.resolve();
+    return new Promise<void>(resolve => {
+      queuedSearch = { generation, root: rootPath, query: query.trim(), extras: [...useSettingsStore.getState().config.extra_folders], resolve };
+      searchTimer = setTimeout(() => { searchTimer = null; void runSearch(); }, 250);
+    });
+  },
+
+  setActiveFolder: async (folder, rootPath, requestId) => {
+    const isCurrentOpen = () => requestId === undefined || get().isCurrentOpen(requestId);
+    if (!isCurrentOpen()) return;
+    const generation = ++folderGeneration;
+    const revision = useSettingsStore.getState().storageRevision;
+    const isCurrent = () => {
+      const current = useSettingsStore.getState();
+      return generation === folderGeneration && revision === current.storageRevision && pathIdentity(rootPath) === pathIdentity(current.config.storage_path) && isCurrentOpen();
+    };
+    void get().setSearchQuery('', rootPath);
+    set({ activeFolder: folder, isLoading: true });
+    try {
+      const notes = folder ? await getNotesInFolder(folder, rootPath)
+        : await getAllNotes(rootPath, useSettingsStore.getState().config.extra_folders || []);
+      if (!isCurrent()) return;
+      set({ notes, isLoading: false });
+      if (get().sortMode === 'custom') {
+        const order = await getSortOrder(rootPath, folder || '');
+        if (isCurrent()) set({ customSortOrder: order });
+      }
+    } catch (error) {
+      if (isCurrent()) set({ isLoading: false });
+      console.error('Failed to select folder:', error);
     }
   },
 
@@ -759,24 +1081,23 @@ export const useNotesStore = create<NotesState>((set, get) => {
   applyNotePathChange: (oldPath, newPath, newTitle) => {
     const state = get();
     const oldKey = oldPath.replace(/\\/g, '/');
+    const active = findSession(state.activeTabPath);
+    const session = findSession(oldPath);
+    if (session) {
+      migrateSession(session, { ...session.note, id: newPath, path: newPath, title: newTitle });
+    }
+    openingReads.delete(documentKey(oldPath));
+    if (pendingOpen && documentKey(pendingOpen.note.path) === documentKey(oldPath)) invalidateOpen();
     const updatedTabs = state.openTabs.map(t =>
-      t.path === oldPath
-        ? { ...t, path: newPath, note: { ...t.note, id: newPath, path: newPath, title: newTitle } }
-        : t
+      session && documentKey(t.path) === documentKey(oldPath) ? asTab(session) : t
     );
-    const updates: Partial<NotesState> = { openTabs: updatedTabs };
-    if (state.activeTabPath === oldPath) {
-      updates.activeTabPath = newPath;
-    }
-    if (state.activeNote && state.activeNote.path === oldPath) {
-      updates.activeNote = { ...state.activeNote, id: newPath, path: newPath, title: newTitle };
-    }
+    const updates: Partial<NotesState> = { openTabs: updatedTabs, ...activeFields(active) };
     const oldNote = state.notes.find(n => n.path.replace(/\\/g, '/') === oldKey);
     if (oldNote) {
       // 本地同步换行：全量刷新是渐进 chunk 合并，旧路径行要到扫描收尾才消失，期间会新旧标题并存闪现
       updates.notes = [
         ...state.notes.filter(n => n.path.replace(/\\/g, '/') !== oldKey),
-        { ...oldNote, id: newPath, path: newPath, title: newTitle },
+        { ...oldNote, id: newPath, path: newPath, title: newTitle, is_encrypted: encryptedPath(newPath) },
       ].sort((a, b) => b.modified_at.localeCompare(a.modified_at));
     }
     set(updates);
@@ -800,12 +1121,17 @@ export const useNotesStore = create<NotesState>((set, get) => {
       const path = remap(n.path);
       return { ...n, id: path, path };
     };
+    const active = findSession(get().activeTabPath);
+    for (const session of [...sessions.values()]) {
+      if (isUnder(session.note.path)) migrateSession(session, remapNote(session.note));
+    }
+    for (const key of openingReads.keys()) {
+      if (isUnder(key)) openingReads.delete(key);
+    }
+    if (pendingOpen && isUnder(pendingOpen.note.path)) invalidateOpen();
     set(s => ({
-      openTabs: s.openTabs.map(t => isUnder(t.path)
-        ? { ...t, path: remap(t.path), note: remapNote(t.note) }
-        : t),
-      activeTabPath: s.activeTabPath && isUnder(s.activeTabPath) ? remap(s.activeTabPath) : s.activeTabPath,
-      activeNote: s.activeNote && isUnder(s.activeNote.path) ? remapNote(s.activeNote) : s.activeNote,
+      openTabs: s.openTabs.map(t => isUnder(t.path) ? asTab(findSession(remap(t.path))!) : t),
+      ...activeFields(active),
       notes: s.notes.map(remapNote),
       activeFolder: s.activeFolder && isUnder(s.activeFolder) ? remap(s.activeFolder) : s.activeFolder,
       expandedFolders: s.expandedFolders.map(p => (isUnder(p) ? remap(p) : p)),
@@ -813,125 +1139,121 @@ export const useNotesStore = create<NotesState>((set, get) => {
   },
 
   registerCreatedNote: (note) => {
-    // 新建/复制后本地插行：吞掉 watcher 对新文件的回环事件，并广播给 UnifiedTree 插入行，
-    // 不再走全量刷新（目录树空壳重建会让展开的子树收起再展开）
-    get().markRecentWrite(note.path);
     window.dispatchEvent(new CustomEvent('note-created', { detail: { note } }));
   },
 
   mergeProjectChunk: (project) => {
-    // 渐进加载：顶层目录空壳/完整 chunk 立即并入；已存在时原位替换保持行序稳定，新目录追加末尾
+    // 发现阶段空壳只补新行，不能在扫描失败时抹掉已有子树；完整 chunk 才权威替换。
     // 在途扫描的 chunk 可能属于已移除文件夹：不在当前根之下的 chunk 忽略，避免移除行复活
     const cfg = useSettingsStore.getState().config;
     const pp = project.path.replace(/\\/g, '/').toLowerCase();
     const roots = [cfg.storage_path, ...(cfg.extra_folders || [])].filter(Boolean)
       .map(p => p.replace(/\\/g, '/').toLowerCase());
     if (!roots.some(r => pp === r || pp.startsWith(r + '/'))) return;
-    set(s => ({
-      projects: s.projects.some(p => p.path === project.path)
-        ? s.projects.map(p => (p.path === project.path ? project : p))
-        : [...s.projects, project],
-    }));
+    set(s => {
+      const existing = s.projects.some(p => projectKey(p.path) === projectKey(project.path));
+      if (project.scanning && existing) return s;
+      return {
+        projects: existing
+          ? s.projects.map(p => (projectKey(p.path) === projectKey(project.path) ? project : p))
+          : [...s.projects, project],
+      };
+    });
   },
 
   setNotesFromCache: (loaded) => {
     // 用已扫描的全量笔记更新 store.notes，避免重复磁盘扫描
     const { activeFolder, searchQuery } = get();
-    const q = searchQuery.trim().toLowerCase();
-    if (q) {
-      set({ notes: loaded.filter(n => n.title.toLowerCase().includes(q)) });
-    } else if (activeFolder) {
-      set({ notes: loaded.filter(n => n.path.startsWith(activeFolder + '\\') || n.path.startsWith(activeFolder + '/')) });
-    } else {
-      set({ notes: loaded });
-    }
-  },
-
-  // 应用自身写入标记：watcher 会回环触发自己保存的文件事件，
-  // 命中时直接吞掉，避免每次自动保存都引发刷新。
-  // 一次写盘会拆成多条回环事件（Windows 还会额外上报父目录），
-  // 因此窗口内持续压制而不是命中一次就删除标记
-  markRecentWrite: (path) => {
-    const now = Date.now();
-    for (const [key, at] of recentWrites) {
-      if (now - at > 10_000) recentWrites.delete(key);
-    }
-    recentWrites.set(path.replace(/\\/g, '/'), now);
-  },
-  consumeRecentWrite: (path) => {
-    const key = path.replace(/\\/g, '/');
-    const ts = recentWrites.get(key);
-    if (ts === undefined) return false;
-    if (Date.now() - ts < 5000) return true;
-    recentWrites.delete(key);
-    return false;
+    set({ notes: activeFolder ? loaded.filter(note => inScope(note.path, { path: activeFolder, directory: true })) : loaded });
+    if (searchQuery.trim()) void get().setSearchQuery(searchQuery, useSettingsStore.getState().config.storage_path);
   },
 
   duplicateNote: async (rootPath) => {
-    const { activeNote, activeFolder } = get();
+    const { activeNote, activeFolder, activeContent } = get();
     if (!activeNote || isPdfPath(activeNote.path)) return;
+    if (activeNote.is_encrypted || encryptedPath(activeNote.path)) {
+      warnDocument('不能将加密草稿复制为明文 / Cannot duplicate an encrypted draft as plaintext');
+      return;
+    }
     try {
-      const result = await readNote(activeNote.path);
       const copyTitle = `${activeNote.title} copy`;
       const folder = activeFolder || rootPath;
-      const newNote = await createNote(folder, copyTitle);
-      await writeNote(newNote.path, result.content);
-      get().registerCreatedNote(newNote);
+      await get().createDocument(folder, copyTitle, activeContent, false);
     } catch (e) {
       console.error('Failed to duplicate note:', e);
     }
   },
 
   setEncryptionDialog: (dialog) => {
+    if (get().closing) return;
+    invalidateOpen();
     set({ encryptionDialog: dialog });
   },
 
-  onNoteUnlocked: (content, password) => {
-    const { activeTabPath } = get();
-    const updatedTabs = get().openTabs.map(t =>
-      t.path === activeTabPath ? { ...t, content, isDirty: false, encryptionPassword: password } : t
+  onNoteUnlocked: (notePath, snapshot, password, requestId) => {
+    const target = pendingOpen;
+    const dialog = get().encryptionDialog;
+    if (get().closing || !password || !target || target.requestId !== requestId || navigationGeneration !== requestId ||
+        documentKey(target.note.path) !== documentKey(notePath) || !dialog?.visible ||
+        dialog.mode !== 'unlock' || dialog.requestId !== requestId || documentKey(dialog.notePath) !== documentKey(notePath)) return false;
+    // Unlock creates the requested session, never writes into the old active tab.
+    handOff(notePath);
+    const session = findSession(notePath) ?? newSession(
+      { ...target.note, is_encrypted: true }, snapshot.content, snapshot.disk_version, target.temporary, target.viewMode, password,
     );
-    set({ activeContent: content, isDirty: false, activeEncryptionPassword: password, openTabs: updatedTabs });
+    pendingOpen = null;
+    set({ encryptionDialog: null });
+    activate(session, get().openTabs.some(t => documentKey(t.path) === documentKey(notePath))
+      ? get().openTabs : [...get().openTabs, asTab(session)]);
+    return true;
   },
 
   clearEncryptionPassword: () => {
-    set({ activeEncryptionPassword: null });
+    const session = findSession(get().activeTabPath);
+    if (!session) return;
+    session.password = null;
+    publish(session);
   },
 
-  openTemporaryFile: async (path: string) => {
-    try {
-      const isPdf = isPdfPath(path);
-      const content = isPdf ? '' : (await readNote(path)).content;
-      const meta: NoteMetadata = {
-        id: path,
-        title: path.split('/').pop()?.replace(/\.(md|pdf)$/i, '') || 'Untitled',
-        path,
-        folder: path.substring(0, path.lastIndexOf('/')),
-        created_at: new Date().toISOString(),
-        modified_at: new Date().toISOString(),
-        pinned: false,
-        size: content.length,
-        is_encrypted: false,
-      };
-      // Add as tab
-      const newTab: OpenTab = {
-        path,
-        note: meta,
-        content,
-        isDirty: false,
-        viewMode: isPdf ? 'preview' : 'split',
-      };
-      set((s) => ({
-        openTabs: [...s.openTabs.filter(t => t.path !== path), newTab],
-        activeTabPath: path,
-        activeNote: meta,
-        activeContent: content,
-        isTemporaryFile: true,
-      }));
-      useEditorStore.getState().setViewMode(isPdf ? 'preview' : 'split');
-    } catch (e) {
-      console.error('Failed to open temporary file:', e);
-    }
+  openTemporaryFile: (path, initialViewMode = 'split') => {
+    const slash = path.replace(/\\/g, '/');
+    const known = get().notes.find(n => documentKey(n.path) === documentKey(path));
+    const meta: NoteMetadata = known ?? {
+      id: path, path,
+      title: slash.split('/').pop()?.replace(/\.(md|pdf)$/i, '') || 'Untitled',
+      folder: slash.substring(0, slash.lastIndexOf('/')),
+      created_at: new Date().toISOString(), modified_at: new Date().toISOString(),
+      pinned: false, size: 0, is_encrypted: encryptedPath(path),
+    };
+    return openDocument(meta, true, initialViewMode);
   },
   };
 });
+
+/** Window-close transaction; inject only the native destroy operation, never call close() recursively. */
+export function createDocumentCloseHandler(destroyWindow: () => Promise<void>) {
+  let draining = false;
+  return async (event: { preventDefault: () => void }): Promise<void> => {
+    // Prevent Tauri's implicit destroy too, so native permission errors are caught below.
+    event.preventDefault();
+    if (draining) return;
+    draining = true;
+    const store = useNotesStore.getState();
+    store.setClosing('draining');
+    try {
+      if (!(await store.flushPendingSaves())) {
+        warnDocument('保存失败，窗口保持打开，草稿已保留 / Save failed; window and drafts retained');
+        return;
+      }
+      store.setClosing('destroying');
+      // Seal edits before the final drain, including edits queued with the first drain's completion.
+      if (!(await store.flushPendingSaves())) return;
+      await destroyWindow();
+    } catch (error) {
+      warnDocument(`窗口关闭失败 / Window close failed: ${String(error)}`);
+    } finally {
+      store.setClosing(null);
+      draining = false;
+    }
+  };
+}

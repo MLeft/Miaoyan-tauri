@@ -2,6 +2,9 @@
   "app": {
     "name": "MiaoYan",
     "loading": "Cargando...",
+    "configLoadFailed": "No se pudo cargar la configuración",
+    "configPreserved": "La configuración original no se ha modificado. Corrige el archivo o los permisos de acceso y vuelve a intentarlo.",
+    "retryConfig": "Volver a cargar",
     "selectFolder": "Seleccionar carpeta de notas",
     "subtitle": "Un editor de Markdown ligero"
   },
@@ -13,6 +16,9 @@
   "notesList": {
     "search": "Buscar...",
     "noResults": "Sin resultados",
+    "searching": "Buscando en el contenido…",
+    "searchFailed": "Falló la búsqueda de texto. Se mantienen las coincidencias de nombres y carpetas.",
+    "retrySearch": "Reintentar búsqueda",
     "noNotes": "Sin notas aún",
     "empty": "Sin notas aún",
     "notes": "notas",
@@ -40,7 +46,30 @@
     "format": "Formato",
     "newNote": "Nueva nota"
   },
+  "saveRecovery": {
+    "description": "No se pudo guardar. Los borradores se conservan; guardar una copia no descarta el original.",
+    "retry": "Reintentar guardado",
+    "copy": "Guardar una copia…",
+    "discard": "Descartar borrador",
+    "discardWarning": "¿Descartar el texto y los cambios pendientes de anotaciones e imágenes y cerrar esta pestaña? El archivo del disco no cambiará.",
+    "changed": "El documento cambió o sigue ocupado. El borrador se conservó; vuelve a intentarlo."
+  },
+  "recovery": {
+    "title": "Es necesario recuperar documentos",
+    "description": "Los documentos afectados son de solo lectura hasta su recuperación.",
+    "retry": "Reintentar recuperación",
+    "working": "Recuperando...",
+    "refresh": "Actualizar estado",
+    "details": "Rutas de los archivos conservados"
+  },
   "settings": {
+    "saving": "Guardando...",
+    "saveFailed": "Ajustes sin guardar",
+    "retrySave": "Reintentar",
+    "saveHint": "El texto se guarda al pulsar Enter o salir del campo.",
+    "invalidValue": "Introduce un valor válido.",
+    "close": "Cerrar ajustes",
+    "autoSaveHint": "0 desactiva el guardado automático.",
     "title": "Configuración",
     "general": "Interfaz",
     "editor": "Experiencia",
@@ -74,9 +103,22 @@
     "fileAssociationHint": "Añade 'Open with MiaoYan' al menú contextual. Establecer como predeterminada requiere una confirmación en Configuración de Windows.",
     "no": "No",
     "quickLaunch": "Inicio rápido",
+    "recording": "Grabando...",
     "clear": "Limpiar",
+    "lineEnding": "Fin de línea",
+    "lineEndingLF": "Modo MiaoYan",
+    "lineEndingCRLF": "Modo GitHub",
+    "lineSpacing": "Interlineado",
+    "letterSpacing": "Espaciado entre letras",
+    "previewWidth": "Ancho de vista previa",
+    "previewWidthFull": "Ancho completo",
+    "typography": "Tipografía",
+    "titleFontSize": "Tamaño de fuente del título",
+    "presentationFontSize": "Tamaño de fuente de presentación",
+    "lineHeight": "Altura de línea",
     "imageUploadService": "Servicio de carga de imágenes",
     "imageUploadNone": "Ninguno (local)",
+    "debugLog": "Registro de depuración",
     "about": "Acerca de"
   },
   "contextMenu": {
@@ -86,7 +128,18 @@
     "copyPath": "Copiar ruta del archivo",
     "delete": "Eliminar",
     "openInFinder": "Mostrar en el gestor de archivos",
-    "duplicate": "Duplicar"
+    "duplicate": "Duplicar",
+    "copyName": "Copiar nombre del archivo",
+    "bold": "Negrita",
+    "italic": "Cursiva",
+    "strikethrough": "Tachado",
+    "inlineCode": "Código en línea",
+    "unorderedList": "Lista con viñetas",
+    "orderedList": "Lista numerada",
+    "todo": "Tarea",
+    "link": "Enlace",
+    "image": "Imagen",
+    "codeBlock": "Bloque de código"
   },
   "export": {
     "pdf": "PDF",
@@ -160,7 +213,9 @@
     "wrongPassword": "Contraseña incorrecta",
     "success": "Cifrado aplicado",
     "removed": "Cifrado eliminado",
-    "mismatch": "Las contraseñas no coinciden"
+    "mismatch": "Las contraseñas no coinciden",
+    "failed": "El documento está ocupado o sin guardar; no se cambió el cifrado.",
+    "scopeWarning": "Solo protege el documento, las anotaciones y el historial gestionado por la aplicación. Las imágenes enlazadas, los adjuntos y las copias externas no se cifran."
   },
   "toast": {
     "unsupportedFile": "Tipo de archivo no compatible",
@@ -175,6 +230,7 @@
     "revealInFinder": "Mostrar en Finder",
     "openInTerminal": "Abrir en Terminal",
     "delete": "Eliminar carpeta",
+    "copyName": "Copiar nombre de la carpeta",
     "copyPath": "Copiar ruta de la carpeta"
   },
   "tabMenu": {
