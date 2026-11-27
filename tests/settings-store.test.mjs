@@ -142,3 +142,30 @@ test('configuration load errors remain visible instead of looking like a fresh i
   assert.equal(store.getState().loaded, true);
   assert.match(store.getState().loadError, /invalid config JSON/);
 });
+
+test('the legacy mono editor default migrates once to the signature font', async () => {
+  const saved = [];
+  const { store } = createSettings(async (command, args) => {
+    if (command === 'get_config') return { ...store.getState().config, editor_font_family: 'ui-monospace' };
+    if (command === 'save_config') { saved.push(args.config.editor_font_family); return; }
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  await store.getState().loadConfig();
+  assert.match(store.getState().config.editor_font_family, /TsangerJinKai02/);
+  await tick();
+  assert.equal(saved.length, 1);
+  assert.match(saved[0], /TsangerJinKai02/);
+});
+
+test('a deliberate editor font choice is never overwritten', async () => {
+  let writes = 0;
+  const { store } = createSettings(async (command) => {
+    if (command === 'get_config') return { ...store.getState().config, editor_font_family: 'Courier New' };
+    if (command === 'save_config') { writes++; return; }
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  await store.getState().loadConfig();
+  await tick();
+  assert.equal(store.getState().config.editor_font_family, 'Courier New');
+  assert.equal(writes, 0);
+});

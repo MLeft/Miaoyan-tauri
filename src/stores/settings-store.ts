@@ -20,7 +20,7 @@ const defaultConfig: AppConfig = {
   storage_path: '',
   theme: 'system',
   language: 'en',
-  editor_font_family: 'ui-monospace',
+  editor_font_family: "'TsangerJinKai02', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
   editor_font_size: 15,
   preview_font_family: 'system-ui',
   preview_font_size: 15,
@@ -93,7 +93,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     loadConfig: async () => {
       set({ loaded: false });
       try {
-        const config = await getConfig();
+        let config = await getConfig();
+        // The mono editor font was a port artifact, not a deliberate choice;
+        // migrate that exact legacy default to the signature Kai font once.
+        if (config.editor_font_family === 'ui-monospace') {
+          config = { ...config, editor_font_family: defaultConfig.editor_font_family };
+          void saveConfig(config).catch(() => {});
+        }
         const storageRevision = get().storageRevision + Number(pathIdentity(get().config.storage_path) !== pathIdentity(config.storage_path));
         setScanRoots(config.storage_path, config.extra_folders);
         set({ config, draftConfig: null, storageRevision, loaded: true, loadError: null });
