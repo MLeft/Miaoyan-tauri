@@ -7,7 +7,7 @@ import { useSettingsStore } from '../src/stores/settings-store';
 const rootPath = 'C:/search-fixture', extra = 'C:/extra-fixture';
 const folder = `${rootPath}/Manuals`;
 const note = (path, body) => ({ id: path, path, title: path.split('/').pop(), folder: path.slice(0, path.lastIndexOf('/')), created_at: '', modified_at: '', pinned: false, size: body.length, is_encrypted: false, body });
-const notes = [note(`${rootPath}/needle-title.md`, 'plain'), note(`${extra}/reference.md`, 'needle in body'), note(`${folder}/overview.md`, 'manual content')];
+const notes = [note(`${rootPath}/needle-title.md`, 'plain'), note(`${extra}/reference.md`, 'needle in body'), note(`${folder}/overview.md`, 'manual content'), note(`${rootPath}/manual.pdf`, 'binary')];
 const until = async (predicate, message) => {
   const deadline = performance.now() + 4000;
   while (performance.now() < deadline) {
@@ -114,9 +114,10 @@ export async function checkRootChangeSearch() {
 export async function prepareLargeSearch() {
   const f = window.__searchFixture;
   if (useNotesStore.getState().notes.length !== 50000) throw new Error('Large library fixture did not load all notes');
+  const bulkCount = useNotesStore.getState().notes.filter(entry => entry.path.includes('/bulk-')).length;
   const tree = f.mount.querySelector('.overflow-y-auto');
   tree.scrollTop = tree.scrollHeight;
-  await until(() => f.mount.textContent.includes('bulk-49996.md'), 'Last note was not reachable by scrolling');
+  await until(() => f.mount.textContent.includes(`bulk-${bulkCount - 1}.md`), 'Last note was not reachable by scrolling');
   f.domElements = f.mount.querySelectorAll('*').length;
   if (f.domElements > 1500) throw new Error(`Large tree mounted too many elements: ${f.domElements}`);
   f.mount.addEventListener('input', () => { f.inputAt = performance.now(); }, { capture: true, once: true });
@@ -160,4 +161,43 @@ export async function checkSearchRetry() {
   await until(() => useNotesStore.getState().searchStatus === 'idle', 'Search retry failed');
   if (!f.mount.textContent.includes('overview.md')) throw new Error('Retried body match was not displayed');
   return { passed: true, bodyMatchesExtraRoots: true, sharedQuery: true, clearKeepsExpansion: true, failureRetry: true };
+}
+
+export async function checkSearchFilters() {
+  const f = window.__searchFixture;
+  const store = useNotesStore.getState();
+  const funnel = f.mount.querySelector('button[aria-expanded]');
+  if (!funnel) throw new Error('Search filter button missing');
+  funnel.click();
+  await until(() => f.mount.querySelector('[role=dialog]'), 'Filter panel did not open');
+  const radios = f.mount.querySelector('[role=dialog]').querySelectorAll('[role=menuitemradio]');
+  if (radios.length !== 6) throw new Error(`Filter panel exposed ${radios.length} options`);
+  radios[1].click();
+  await until(() => useNotesStore.getState().searchScope === 'filename', 'Filter panel did not apply the filename scope');
+
+  const nativeSearches = () => f.calls.filter(call => call.command === 'search_notes').length;
+  const baseline = nativeSearches();
+  await store.setSearchQuery('needle', rootPath);
+  await until(() => f.mount.textContent.includes('needle-title.md'), 'Filename scope lost the filename match');
+  if (f.mount.textContent.includes('reference.md')) throw new Error('Body-only result survived the filename-only scope');
+  if (nativeSearches() !== baseline) throw new Error('Filename-only scope still ran a native content search');
+
+  useNotesStore.getState().setSearchFilters({ scope: 'content', type: 'pdf' });
+  await store.setSearchQuery('.pdf', rootPath);
+  await until(() => f.mount.textContent.includes('manual.pdf'), 'PDF type filter did not show the PDF note');
+  if (f.mount.textContent.includes('needle-title.md') || f.mount.textContent.includes('reference.md')) throw new Error('Non-PDF rows survived the PDF type filter');
+  if (nativeSearches() !== baseline) throw new Error('PDF type filter still ran a native content search');
+
+  useNotesStore.getState().setSearchFilters({ type: 'md' });
+  void store.setSearchQuery('needle', rootPath);
+  await until(() => f.mount.textContent.includes('needle-title.md'), 'Markdown type filter lost the filename match');
+  await until(() => f.calls.some(call => call.command === 'search_notes' && call.args.query === 'needle'), 'Markdown type filter did not search content');
+  f.release();
+  await until(() => f.mount.textContent.includes('reference.md'), 'Markdown type filter lost its content match');
+  if (f.mount.textContent.includes('manual.pdf')) throw new Error('PDF row survived the Markdown type filter');
+
+  funnel.click();
+  useNotesStore.getState().setSearchFilters({ scope: 'content', type: 'all' });
+  await store.setSearchQuery('', rootPath);
+  return { passed: true, panelOpensWithSixOptions: true, filenameOnlySkipsNativeSearch: true, pdfTypeSkipsNativeSearch: true, typeFilterApplies: true };
 }

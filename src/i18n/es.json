@@ -46,6 +46,15 @@
     "format": "Formato",
     "newNote": "Nueva nota"
   },
+  "search": {
+    "filter": "Filtros de búsqueda",
+    "scope": "Buscar en",
+    "scopeContent": "Nombres + contenido",
+    "scopeFilename": "Solo nombres de archivo",
+    "type": "Tipo de archivo",
+    "allTypes": "Todos",
+    "markdown": "Markdown"
+  },
   "saveRecovery": {
     "description": "No se pudo guardar. Los borradores se conservan; guardar una copia no descarta el original.",
     "retry": "Reintentar guardado",

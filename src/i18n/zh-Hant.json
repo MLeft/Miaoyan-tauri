@@ -46,6 +46,15 @@
     "format": "排版",
     "newNote": "新建筆記"
   },
+  "search": {
+    "filter": "搜尋篩選",
+    "scope": "搜尋範圍",
+    "scopeContent": "檔名+內容",
+    "scopeFilename": "僅檔名",
+    "type": "檔案類型",
+    "allTypes": "全部",
+    "markdown": "Markdown"
+  },
   "saveRecovery": {
     "description": "儲存失敗，草稿已保留。儲存復原副本不會丟棄原文件草稿。",
     "retry": "重試儲存",

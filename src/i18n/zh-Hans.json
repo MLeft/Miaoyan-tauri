@@ -46,6 +46,15 @@
     "format": "排版",
     "newNote": "新建笔记"
   },
+  "search": {
+    "filter": "搜索筛选",
+    "scope": "搜索范围",
+    "scopeContent": "文件名+内容",
+    "scopeFilename": "仅文件名",
+    "type": "文件类型",
+    "allTypes": "全部",
+    "markdown": "Markdown"
+  },
   "saveRecovery": {
     "description": "保存失败，草稿已保留。保存恢复副本不会丢弃原文档草稿。",
     "retry": "重试保存",

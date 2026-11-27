@@ -46,6 +46,15 @@
     "format": "Format",
     "newNote": "New Note"
   },
+  "search": {
+    "filter": "Search filters",
+    "scope": "Search in",
+    "scopeContent": "Names + content",
+    "scopeFilename": "File names only",
+    "type": "File type",
+    "allTypes": "All",
+    "markdown": "Markdown"
+  },
   "saveRecovery": {
     "description": "Save failed; drafts are kept. A recovery copy does not discard the original draft.",
     "retry": "Retry save",

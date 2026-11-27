@@ -46,6 +46,15 @@
     "format": "整形",
     "newNote": "新規ノート"
   },
+  "search": {
+    "filter": "検索フィルター",
+    "scope": "検索対象",
+    "scopeContent": "ファイル名+本文",
+    "scopeFilename": "ファイル名のみ",
+    "type": "ファイル形式",
+    "allTypes": "すべて",
+    "markdown": "Markdown"
+  },
   "saveRecovery": {
     "description": "保存に失敗しました。下書きは保持されています。コピーを保存しても元の下書きは破棄されません。",
     "retry": "保存を再試行",

@@ -15,7 +15,8 @@ import { useTranslation } from 'react-i18next';
 import { SyncStatusIndicator } from '../shared/SyncStatus';
 import { EncryptionDialog } from '../shared/EncryptionDialog';
 import { perfReport } from '../../services/perf';
-import { isPdfPath } from '../../utils/fileType';
+import { isPdfPath, noteMatchesSearchType } from '../../utils/fileType';
+import type { SearchFileType } from '../../utils/fileType';
 import { pathIdentity, isPathWithin } from '../../utils/path-identity';
 
 /* ── SVG Icons ── */
@@ -220,6 +221,7 @@ export function UnifiedTree() {
     isLoading, loadProjects,
     encryptionDialog, setEncryptionDialog, onNoteUnlocked,
     expandedFolders, allNotesExpanded, searchQuery, searchResults, searchStatus, searchError, setSearchQuery,
+    searchScope, searchType, setSearchFilters,
     toggleExpandedFolder, setAllNotesExpanded,
   } = useNotesStore(useShallow((s) => ({
     projects: s.projects, activeNote: s.activeNote,
@@ -228,11 +230,14 @@ export function UnifiedTree() {
     encryptionDialog: s.encryptionDialog, setEncryptionDialog: s.setEncryptionDialog, onNoteUnlocked: s.onNoteUnlocked,
     expandedFolders: s.expandedFolders, allNotesExpanded: s.allNotesExpanded, searchQuery: s.searchQuery,
     searchResults: s.searchResults, searchStatus: s.searchStatus, searchError: s.searchError, setSearchQuery: s.setSearchQuery,
+    searchScope: s.searchScope, searchType: s.searchType, setSearchFilters: s.setSearchFilters,
     toggleExpandedFolder: s.toggleExpandedFolder, setAllNotesExpanded: s.setAllNotesExpanded,
   })));
   const { config } = useSettingsStore();
 
   const [contextMenu, setContextMenu] = useState<TreeContextMenu>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersActive = searchScope !== 'content' || searchType !== 'all';
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   useLayoutEffect(() => {
@@ -815,11 +820,14 @@ export function UnifiedTree() {
   const filteredNotes = useMemo(() => {
     const q = searchInput.trim().toLowerCase();
     if (!q) return allNotes;
-    const bodyMatches = new Set(searchResults.map(note => normPath(note.path)));
-    const candidates = new Map([...allNotes, ...searchResults].map(note => [normPath(note.path), note]));
-    return [...candidates.values()].filter(note => bodyMatches.has(normPath(note.path)) ||
-      note.title.toLowerCase().includes(q) || getParentPath(note.path).toLowerCase().includes(q));
-  }, [allNotes, searchInput, searchResults]);
+    const contentResults = searchScope === 'content' ? searchResults : [];
+    const bodyMatches = new Set(contentResults.map(note => normPath(note.path)));
+    const candidates = new Map([...allNotes, ...contentResults].map(note => [normPath(note.path), note]));
+    return [...candidates.values()].filter(note =>
+      noteMatchesSearchType(note, searchType) &&
+      (bodyMatches.has(normPath(note.path)) ||
+        note.title.toLowerCase().includes(q) || getParentPath(note.path).toLowerCase().includes(q)));
+  }, [allNotes, searchInput, searchResults, searchScope, searchType]);
 
   /* ── Group notes by parent folder path ── */
   const notesByFolder = useMemo(() => {
@@ -1180,7 +1188,7 @@ export function UnifiedTree() {
     <div className="h-full flex flex-col border-r sidebar-transition" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border)' }}>
       {/* Search + Actions */}
       <div className="px-2 pt-2 pb-1">
-        <div className="flex items-center gap-1">
+        <div className="relative flex items-center gap-1">
           <div className="flex-1 flex items-center gap-1.5 px-2 rounded-md text-xs"
             style={{ backgroundColor: 'var(--bg-tertiary)', height: '26px' }}>
             <span style={{ color: 'var(--text-tertiary)' }}><IconSearch /></span>
@@ -1194,6 +1202,63 @@ export function UnifiedTree() {
               style={{ color: 'var(--text-primary)' }}
             />
           </div>
+          <button
+            type="button"
+            title={t('search.filter')}
+            aria-label={t('search.filter')}
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen(open => !open)}
+            className="flex items-center justify-center rounded-md flex-shrink-0"
+            style={{
+              width: 26, height: 26, border: 'none', cursor: 'pointer',
+              color: filtersActive ? 'var(--accent-icon)' : 'var(--text-tertiary)',
+              backgroundColor: filtersActive ? 'var(--accent-light)' : 'transparent',
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" /></svg>
+          </button>
+          {filtersOpen && (
+            <>
+              <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setFiltersOpen(false)} />
+              <div
+                role="dialog"
+                aria-label={t('search.filter')}
+                className="absolute right-0 rounded-md shadow-lg p-2 text-xs"
+                style={{ top: '100%', marginTop: 4, zIndex: 50, width: 190, backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+              >
+                <div className="px-1 pb-1 text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>{t('search.scope')}</div>
+                {([['content', t('search.scopeContent')], ['filename', t('search.scopeFilename')]] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={searchScope === value}
+                    onClick={() => setSearchFilters({ scope: value })}
+                    className="w-full text-left px-1.5 rounded flex items-center gap-1.5"
+                    style={{ height: 24, border: 'none', cursor: 'pointer', color: 'var(--text-primary)', backgroundColor: searchScope === value ? 'var(--accent-light)' : 'transparent' }}
+                  >
+                    <span className="w-3 text-center flex-shrink-0" style={{ color: 'var(--accent-icon)' }}>{searchScope === value ? '✓' : ''}</span>
+                    {label}
+                  </button>
+                ))}
+                <div className="px-1 pb-1 pt-2 text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>{t('search.type')}</div>
+                {([['all', t('search.allTypes')], ['md', t('search.markdown')], ['pdf', 'PDF'], ['html', 'HTML']] as [SearchFileType, string][]).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={searchType === value}
+                    onClick={() => setSearchFilters({ type: value })}
+                    className="w-full text-left px-1.5 rounded flex items-center gap-1.5"
+                    style={{ height: 24, border: 'none', cursor: 'pointer', color: 'var(--text-primary)', backgroundColor: searchType === value ? 'var(--accent-light)' : 'transparent' }}
+                  >
+                    <span className="w-3 text-center flex-shrink-0" style={{ color: 'var(--accent-icon)' }}>{searchType === value ? '✓' : ''}</span>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 

@@ -182,6 +182,12 @@ try {
   }
   try {
     await evaluate("import('/tests/search.browser.mjs').then(test => test.openSearchFixture())");
+    results.push(await evaluate("import('/tests/search.browser.mjs').then(test => test.checkSearchFilters())"));
+  } finally {
+    await evaluate('window.__searchFixture?.cleanup()');
+  }
+  try {
+    await evaluate("import('/tests/search.browser.mjs').then(test => test.openSearchFixture())");
     await send('Input.insertText', { text: 'needle' }, sessionId);
     await evaluate("import('/tests/search.browser.mjs').then(test => test.waitForPendingSearch())");
     await press('Backspace', 8);

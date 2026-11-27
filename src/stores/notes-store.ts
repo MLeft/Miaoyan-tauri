@@ -27,6 +27,7 @@ import { perfReport } from '../services/perf';
 import { useEditorStore } from './editor-store';
 import type { ViewMode } from './editor-store';
 import { isPdfPath } from '../utils/fileType';
+import type { SearchFileType } from '../utils/fileType';
 import { pathIdentity, isPathWithin } from '../utils/path-identity';
 
 const projectKey = (p: string) => p.replace(/\\/g, '/').toLowerCase();
@@ -165,6 +166,9 @@ interface NotesState {
   searchResults: NoteMetadata[];
   searchStatus: 'idle' | 'loading' | 'error';
   searchError: string | null;
+  searchScope: 'content' | 'filename';
+  searchType: SearchFileType;
+  setSearchFilters: (filters: { scope?: 'content' | 'filename'; type?: SearchFileType }) => void;
   sortMode: SortMode;
   sortDirection: SortDirection;
   isLoading: boolean;
@@ -575,6 +579,8 @@ export const useNotesStore = create<NotesState>((set, get) => {
   searchResults: [],
   searchStatus: 'idle',
   searchError: null,
+  searchScope: 'content',
+  searchType: 'all',
   sortMode: 'modified',
   sortDirection: 'desc',
   isLoading: false,
@@ -995,7 +1001,10 @@ export const useNotesStore = create<NotesState>((set, get) => {
     searchTimer = null;
     queuedSearch?.resolve();
     queuedSearch = null;
-    set({ searchQuery: query, searchResults: [], searchError: null, searchStatus: query.trim() ? 'loading' : 'idle' });
+    // Filename-only scope and PDF-only types have no text to scan: the tree
+    // filters local names instead of paying for a native full-text pass.
+    const wantsContent = query.trim() !== '' && get().searchScope === 'content' && get().searchType !== 'pdf';
+    set({ searchQuery: query, searchResults: [], searchError: null, searchStatus: wantsContent ? 'loading' : 'idle' });
     if (searchSession !== null) {
       void searchSession.then(sessionId => invalidateSearch(sessionId, generation)).catch(error => {
         const current = get();
@@ -1004,11 +1013,20 @@ export const useNotesStore = create<NotesState>((set, get) => {
         }
       });
     }
-    if (!query.trim()) return Promise.resolve();
+    if (!wantsContent) return Promise.resolve();
     return new Promise<void>(resolve => {
       queuedSearch = { generation, root: rootPath, query: query.trim(), extras: [...useSettingsStore.getState().config.extra_folders], resolve };
       searchTimer = setTimeout(() => { searchTimer = null; void runSearch(); }, 250);
     });
+  },
+
+  setSearchFilters: (filters) => {
+    const scope = filters.scope ?? get().searchScope;
+    const type = filters.type ?? get().searchType;
+    if (scope === get().searchScope && type === get().searchType) return;
+    set({ searchScope: scope, searchType: type });
+    const query = get().searchQuery;
+    if (query.trim()) void get().setSearchQuery(query, useSettingsStore.getState().config.storage_path);
   },
 
   setActiveFolder: async (folder, rootPath, requestId) => {
