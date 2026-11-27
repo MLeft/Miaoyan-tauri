@@ -5,216 +5,155 @@ use std::fs;
 use std::path::Path;
 use std::process::Command as StdCommand;
 use tauri::command;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use crate::models::{NoteMetadata, NoteContent, Project, AppConfig, BacklinkItem};
 use crate::services::storage;
 use crate::services::cloud_sync::{self, CloudSyncInfo};
-use crate::services::encryption;
 use uuid::Uuid;
 
+mod scan;
+use crate::services::scanning::{ScanRun, ScanState};
+
 #[command]
-pub async fn get_projects(app: tauri::AppHandle, root_path: String, extra_folders: Vec<String>) -> Vec<Project> {
-    // 后台线程池：顶层目录发现即发空壳 project-chunk（行立即渲染，权威顺序），
-    // 每目录独立线程递归扫描，扫完再发完整 chunk 替换
+pub fn start_scan_session(window: tauri::WebviewWindow, state: tauri::State<'_, ScanState>) -> String {
+    state.open(window.label())
+}
+
+#[command]
+pub fn invalidate_scan(window: tauri::WebviewWindow, state: tauri::State<'_, ScanState>, session_id: String, lane: String, generation: u64) {
+    state.invalidate(window.label(), &session_id, &lane, generation);
+}
+
+#[command]
+pub fn release_scan_lane(window: tauri::WebviewWindow, state: tauri::State<'_, ScanState>, session_id: String, lane: String, generation: u64) {
+    state.release(window.label(), &session_id, &lane, generation);
+}
+
+#[command]
+pub async fn get_projects(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<'_, ScanState>, root_path: String, extra_folders: Vec<String>, scan_id: String, session_id: String, lane: String, generation: u64) -> Result<Vec<Project>, String> {
+    let Some(run) = state.begin(window.label(), &session_id, &lane, generation) else { return Err("Scan canceled".into()); };
     tauri::async_runtime::spawn_blocking(move || {
-        let mut top_dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
-        let root = Path::new(&root_path);
-        if root.is_dir() {
-            if let Ok(entries) = fs::read_dir(root) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if !p.is_dir() {
-                        continue;
-                    }
-                    let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    if storage::is_ignored_dir(&name) {
-                        continue;
-                    }
-                    top_dirs.push((name, p));
+        let cancelled = || run.is_cancelled();
+        let paths = scan::project_paths(root_path, extra_folders, &cancelled).map_err(|error| format!("Project discovery failed: {error}"))?;
+        if cancelled() { return Err("Scan canceled".into()); }
+        let projects: Vec<_> = paths.into_iter().take_while(|_| !cancelled()).map(|path| {
+            let project = Project {
+                name: path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+                path: path.to_string_lossy().into_owned(), children: Vec::new(), is_root: false,
+            };
+            scan::emit(&app, "miaoyan://project-chunk", &scan_id, scan::ProjectDiscovery { project: &project, scanning: true });
+            project
+        }).collect();
+        let result = scan::bounded_map(projects, |mut project| {
+            match storage::scan_projects(Path::new(&project.path), &cancelled) {
+                Ok(children) => {
+                    project.children = children;
+                    if !cancelled() { scan::emit(&app, "miaoyan://project-chunk", &scan_id, &project); }
+                    Ok(project)
                 }
+                Err(error) => Err(error),
             }
-        }
-        // 先排序再发空壳，与最终返回顺序一致，避免收尾时行序跳变
-        top_dirs.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
-        let mut root_handles: Vec<std::thread::JoinHandle<Project>> = Vec::new();
-        for (name, p) in top_dirs {
-            let path_str = p.to_string_lossy().to_string();
-            let _ = app.emit("miaoyan://project-chunk", Project {
-                name: name.clone(), path: path_str.clone(), children: Vec::new(), is_root: false,
-            });
-            let app = app.clone();
-            root_handles.push(std::thread::spawn(move || {
-                let project = Project {
-                    name,
-                    path: path_str,
-                    children: storage::scan_projects(&p),
-                    is_root: false,
-                };
-                let _ = app.emit("miaoyan://project-chunk", &project);
-                project
-            }));
-        }
-        let extra_handles: Vec<_> = extra_folders
+        }, &cancelled).map_err(|error| error.to_string());
+        if cancelled() { return Err("Scan canceled".into()); }
+        let projects = result?
             .into_iter()
-            .map(|f| {
-                let app = app.clone();
-                std::thread::spawn(move || scan_extra_project(&app, f))
-            })
-            .collect();
-        let mut projects: Vec<Project> = Vec::new();
-        for h in root_handles {
-            if let Ok(p) = h.join() {
-                projects.push(p);
-            }
-        }
-        for h in extra_handles {
-            if let Ok(Some(p)) = h.join() {
-                projects.push(p);
-            }
-        }
-        projects
-    })
-    .await
-    .unwrap_or_default()
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|error| format!("Project scan failed: {error}"))?;
+        Ok(projects)
+    }).await.map_err(|error| format!("Scan task failed: {error}"))?
 }
 
-/// 目录扫描 chunk 事件载荷：一个顶层目录扫完即推送，前端渐进加载目录树
+/// Same wire payload, borrowed while serializing to avoid cloning every note.
 #[derive(serde::Serialize, Clone)]
-pub struct NotesChunk {
-    pub dir: String,
-    pub notes: Vec<NoteMetadata>,
+pub struct NotesChunk<'a> {
+    pub dir: &'a str,
+    pub notes: &'a [NoteMetadata],
 }
 
-/// 额外文件夹/增量导入目录扫描：先发空壳 project-chunk（行立即渲染），递归扫完再发完整 chunk 替换
-fn scan_extra_project(app: &tauri::AppHandle, f: String) -> Option<Project> {
+fn scan_extra_project(app: &tauri::AppHandle, f: String, scan_id: &str, run: &ScanRun) -> std::io::Result<Option<Project>> {
     let pb = std::path::PathBuf::from(&f);
-    if pb.exists() && pb.is_dir() {
-        let name = pb.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let _ = app.emit("miaoyan://project-chunk", Project {
-            name: name.clone(), path: f.clone(), children: Vec::new(), is_root: false,
-        });
-        let project = Project { name, path: f, children: storage::scan_projects(&pb), is_root: false };
-        let _ = app.emit("miaoyan://project-chunk", &project);
-        Some(project)
-    } else {
-        None
-    }
+    if run.is_cancelled() || !pb.is_dir() { return Ok(None); }
+    let mut project = Project {
+        name: pb.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        path: f, children: Vec::new(), is_root: false,
+    };
+    scan::emit(&app, "miaoyan://project-chunk", &scan_id, scan::ProjectDiscovery { project: &project, scanning: true });
+    project.children = storage::scan_projects(&pb, &|| run.is_cancelled())?;
+    if !run.is_cancelled() { scan::emit(app, "miaoyan://project-chunk", scan_id, &project); }
+    Ok(Some(project))
 }
 
-/// 单根目录笔记扫描：按顶层子目录拆分并行，扫完一个发一个 notes-chunk；进度计数跨调用共享（每 200 发 scan-progress）
-fn scan_root_notes(
-    app: &tauri::AppHandle,
-    counter: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    r: &str,
-) -> Vec<NoteMetadata> {
-    let root = Path::new(r);
-    if !root.is_dir() {
-        return Vec::new();
-    }
-    let Ok(entries) = fs::read_dir(root) else { return Vec::new() };
-    let mut collected: Vec<NoteMetadata> = Vec::new();
-    let mut dir_handles: Vec<std::thread::JoinHandle<Vec<NoteMetadata>>> = Vec::new();
-    let mut top_files: Vec<std::path::PathBuf> = Vec::new();
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            // 与旧版整树 WalkDir 行为对齐：根下忽略目录（Trash/.git 等）不扫描
-            if storage::is_ignored_dir(&p.file_name().unwrap_or_default().to_string_lossy()) {
-                continue;
-            }
-            let app = app.clone();
-            let counter = std::sync::Arc::clone(counter);
-            let dir = p.to_string_lossy().to_string();
-            dir_handles.push(std::thread::spawn(move || {
-                let notes = storage::scan_notes_with_progress(Path::new(&dir), |_local| {
-                    let total = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    if total % 200 == 0 {
-                        let _ = app.emit("miaoyan://scan-progress", total);
-                    }
-                });
-                let _ = app.emit("miaoyan://notes-chunk", NotesChunk { dir, notes: notes.clone() });
-                notes
-            }));
-        } else if storage::is_note_file(&p) {
-            top_files.push(p);
-        }
-    }
-    for h in dir_handles {
-        if let Ok(notes) = h.join() {
-            collected.extend(notes);
-        }
-    }
-    // 根目录顶层文件作为一个 chunk 推送
-    if !top_files.is_empty() {
-        let notes: Vec<NoteMetadata> = top_files
-            .iter()
-            .filter_map(|p| storage::build_note_metadata(p, root))
-            .collect();
-        let _ = app.emit("miaoyan://notes-chunk", NotesChunk { dir: r.to_string(), notes: notes.clone() });
-        collected.extend(notes);
-    }
-    collected
+/// All roots share a single bounded worker set. Progress counts successful
+/// metadata reads, including top-level files; no speculative denominator.
+fn scan_root_notes(app: &tauri::AppHandle, roots: Vec<String>, scan_id: &str, run: &ScanRun) -> Result<Vec<NoteMetadata>, String> {
+    // Serialize progress emissions as well as increments so they cannot regress
+    // when workers finish concurrently (only a tiny critical section per file).
+    let counter = std::sync::Mutex::new(0usize);
+    let cancelled = || run.is_cancelled();
+    let tasks = scan::note_tasks(roots, &cancelled).map_err(|error| format!("Note discovery failed: {error}"))?;
+    let chunks = scan::bounded_map(tasks, |task| {
+        scan::scan_task(task, || {
+            let mut total = counter.lock().unwrap();
+            if cancelled() { return; }
+            *total += 1;
+            if *total % 200 == 0 { scan::emit(app, "miaoyan://scan-progress", scan_id, *total); }
+        }, &cancelled).inspect(|(dir, notes)| {
+            if !cancelled() { scan::emit(app, "miaoyan://notes-chunk", scan_id, NotesChunk { dir, notes }); }
+        })
+    }, &cancelled).map_err(|error| error.to_string())?;
+    if cancelled() { return Err("Scan canceled".into()); }
+    let notes: Vec<_> = chunks
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|error| format!("Note scan failed: {error}"))?
+        .into_iter()
+        .flat_map(|(_, notes)| notes)
+        .collect();
+    scan::emit(app, "miaoyan://scan-progress", scan_id, notes.len());
+    Ok(notes)
 }
 
 #[command]
-pub async fn get_all_notes(app: tauri::AppHandle, root_path: String, extra_folders: Vec<String>) -> Vec<NoteMetadata> {
-    // 后台线程池：每个根目录按顶层子目录拆分并行扫描，一个目录扫完立即发 notes-chunk 事件供前端渐进渲染
+pub async fn get_all_notes(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<'_, ScanState>, root_path: String, extra_folders: Vec<String>, scan_id: String, session_id: String, lane: String, generation: u64) -> Result<Vec<NoteMetadata>, String> {
+    let Some(run) = state.begin(window.label(), &session_id, &lane, generation) else { return Err("Scan canceled".into()); };
     tauri::async_runtime::spawn_blocking(move || {
-        // 跨根目录累计已扫描文件数，每 200 个向前端发一次进度事件（导入大文件夹时 Toast 实时计数）
-        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut roots = vec![root_path];
-        roots.extend(extra_folders);
-        let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        // 计数线程与扫描线程并行：总数一算出立即上报，前端渐进加载期间显示「已加载/总数」分数
-        let roots_for_count = roots.clone();
-        let count_handle = std::thread::spawn(move || {
-            roots_for_count.iter().map(|r| storage::count_note_files(Path::new(r))).sum::<usize>()
-        });
-        let handles: Vec<_> = roots
-            .into_iter()
-            .map(|r| {
-                let app = app.clone();
-                let counter = std::sync::Arc::clone(&counter);
-                let collected = std::sync::Arc::clone(&collected);
-                std::thread::spawn(move || {
-                    let notes = scan_root_notes(&app, &counter, &r);
-                    collected.lock().unwrap().extend(notes);
-                })
-            })
-            .collect();
-        // 总数算出立即上报（不等扫描线程），扫描继续进行
-        if let Ok(total) = count_handle.join() {
-            let _ = app.emit("miaoyan://scan-total", total);
-        }
-        for h in handles {
-            let _ = h.join();
-        }
-        let mut notes: Vec<NoteMetadata> = collected.lock().unwrap().clone();
+        let roots = std::iter::once(root_path).chain(extra_folders).collect();
+        let mut notes = scan_root_notes(&app, roots, &scan_id, &run)?;
+        if run.is_cancelled() { return Err("Scan canceled".into()); }
+        scan::emit(&app, "miaoyan://scan-total", &scan_id, notes.len());
         notes.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
-        notes
-    })
-    .await
-    .unwrap_or_default()
+        if run.is_cancelled() { Err("Scan canceled".into()) } else { Ok(notes) }
+    }).await.map_err(|error| format!("Scan task failed: {error}"))?
 }
 
 /// 增量导入单个外部文件夹：只扫新目录（project-chunk/notes-chunk/scan-progress 复用渐进协议，前端监听即合并），
 /// 避免 extra_folders 变更触发全库重扫（历史上导入仅 1 个文件的目录也会重扫 2000+ 文件）
 #[command]
-pub async fn scan_folder(app: tauri::AppHandle, folder: String) -> Vec<NoteMetadata> {
+pub async fn scan_folder(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<'_, ScanState>, folder: String, scan_id: String, session_id: String, lane: String, generation: u64) -> Result<Vec<NoteMetadata>, String> {
+    let Some(run) = state.begin(window.label(), &session_id, &lane, generation) else { return Err("Scan canceled".into()); };
     tauri::async_runtime::spawn_blocking(move || {
-        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let app2 = app.clone();
-        let f2 = folder.clone();
-        let project_handle = std::thread::spawn(move || {
-            scan_extra_project(&app2, f2);
-        });
-        let mut notes = scan_root_notes(&app, &counter, &folder);
-        let _ = project_handle.join();
+        scan_extra_project(&app, folder.clone(), &scan_id, &run).map_err(|error| format!("Project discovery failed: {error}"))?;
+        let mut notes = scan_root_notes(&app, vec![folder], &scan_id, &run)?;
         notes.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
-        notes
-    })
-    .await
-    .unwrap_or_default()
+        if run.is_cancelled() { Err("Scan canceled".into()) } else { Ok(notes) }
+    }).await.map_err(|error| format!("Scan task failed: {error}"))?
+}
+
+#[command]
+pub async fn scope_roots_overlap(removed_roots: Vec<String>, roots: Vec<String>) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let retained: Vec<_> = roots.into_iter().map(std::path::PathBuf::from).collect();
+        for removed in removed_roots {
+            if storage::root_scopes_overlap(Path::new(&removed), &retained).map_err(|error| format!("Scope validation failed: {error}"))? { return Ok(true); }
+        }
+        Ok(false)
+    }).await.map_err(|error| format!("Scope validation worker failed: {error}"))?
+}
+
+#[command]
+pub async fn read_directory_snapshot(path: String) -> Result<storage::DirectorySnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || storage::read_directory_snapshot(Path::new(&path)).map_err(|error| format!("Directory refresh failed: {error}")))
+        .await.map_err(|error| format!("Directory worker failed: {error}"))?
 }
 
 #[command]
@@ -245,126 +184,93 @@ pub fn get_notes_metadata(paths: Vec<String>, root_path: String, extra_folders: 
 }
 
 #[command]
-pub fn read_note(path: String) -> Result<NoteContent, String> {
-    if storage::is_pdf_file(Path::new(&path)) {
-        return Err("PDF files are binary and cannot be read as text".to_string());
-    }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    Ok(NoteContent {
-        id: path,
-        content,
-    })
+pub async fn read_note(app: tauri::AppHandle, path: String) -> Result<NoteContent, PersistenceError> {
+    run_persistence(app, move |state| state.read_document(Path::new(&path))).await
 }
 
 #[command]
-pub fn write_note(path: String, content: String) -> Result<(), String> {
-    if let Some(parent) = Path::new(&path).parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
+pub async fn save_document_copy(app: tauri::AppHandle, source_path: String, target_path: String, content: String, annotation_draft: Option<String>, password: Option<String>, allow_warnings: bool) -> Result<NoteContent, PersistenceError> {
+    let mut outcome = run_persistence(app.clone(), move |state| state.copy_document(Path::new(&source_path), Path::new(&target_path), &content, annotation_draft.as_deref(), password.as_deref(), allow_warnings)).await?;
+    let snapshot = outcome.snapshot.take().unwrap();
+    finish_mutation(&app, outcome);
+    Ok(snapshot)
+}
+
+#[command]
+pub async fn write_note(app: tauri::AppHandle, path: String, content: String, expected_version: String) -> Result<String, PersistenceError> {
+    run_persistence(app, move |state| state.write_document(Path::new(&path), content.as_bytes(), &expected_version)).await
+}
+
+use crate::services::persistence::{Persistence, PersistenceError, MutationOutcome, RecoveryInfo, AnnotationRead, VersionEntry};
+
+fn finish_mutation(app: &tauri::AppHandle, outcome: MutationOutcome) -> String {
+    if !outcome.warnings.is_empty() {
+        let _ = app.emit("document-operation-warning", &outcome.warnings);
     }
-    fs::write(&path, &content)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
+    outcome.path
+}
+
+#[command]
+pub fn resolve_document(state: tauri::State<'_, Persistence>, path: String) -> Result<String, PersistenceError> {
+    state.resolve(Path::new(&path))
+}
+
+#[command]
+pub fn get_document_recoveries(state: tauri::State<'_, Persistence>) -> Result<Vec<RecoveryInfo>, PersistenceError> {
+    state.recoveries()
+}
+
+#[command]
+pub fn retry_document_recovery(state: tauri::State<'_, Persistence>, transaction_id: String) -> Result<(), PersistenceError> {
+    state.retry_recovery(&transaction_id)
+}
+
+#[derive(serde::Serialize)]
+pub struct CreatedNote {
+    #[serde(flatten)]
+    note: NoteMetadata,
+    disk_version: String,
+}
+
+#[command]
+pub fn create_note(app: tauri::AppHandle, state: tauri::State<'_, Persistence>, folder_path: String, title: String) -> Result<CreatedNote, PersistenceError> {
+    let mut outcome = state.create_note(Path::new(&folder_path), &title)?;
+    let disk_version = outcome.snapshot.take().unwrap().disk_version;
+    let path = finish_mutation(&app, outcome);
+    let now = chrono::Utc::now();
+    Ok(CreatedNote { note: NoteMetadata {
+        id: path.clone(),
+        title: Path::new(&path).file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        path, folder: folder_path, created_at: now, modified_at: now,
+        pinned: false, size: 0, is_encrypted: false,
+    }, disk_version })
+}
+
+#[command]
+pub fn delete_note(app: tauri::AppHandle, state: tauri::State<'_, Persistence>, path: String) -> Result<(), PersistenceError> {
+    finish_mutation(&app, state.delete(Path::new(&path))?);
     Ok(())
 }
 
 #[command]
-pub fn create_note(folder_path: String, title: String) -> Result<NoteMetadata, String> {
-    // Use title as-is if it already has a supported extension, otherwise append .md
-    let file_name = if title.ends_with(".md") || title.ends_with(".markdown") || title.ends_with(".txt") || title.ends_with(".html") || title.ends_with(".htm") {
-        title.clone()
-    } else {
-        format!("{}.md", title)
-    };
-    let path = Path::new(&folder_path).join(&file_name);
-    if path.exists() {
-        return Err("File already exists".to_string());
-    }
-    fs::write(&path, "")
-        .map_err(|e| format!("Failed to create file: {}", e))?;
-    let metadata = fs::metadata(&path)
-        .map_err(|e| format!("Failed to read metadata: {}", e))?;
-    let created_at: chrono::DateTime<chrono::Utc> = metadata.created()
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH).into();
-    let modified_at: chrono::DateTime<chrono::Utc> = metadata.modified()
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH).into();
-    Ok(NoteMetadata {
-        id: path.to_string_lossy().to_string(),
-        title: file_name,
-        path: path.to_string_lossy().to_string(),
-        folder: folder_path,
-        created_at,
-        modified_at,
-        pinned: false,
-        size: 0,
-        is_encrypted: false,
-    })
+pub fn rename_note(app: tauri::AppHandle, state: tauri::State<'_, Persistence>, old_path: String, new_title: String, allow_warnings: bool) -> Result<String, PersistenceError> {
+    Ok(finish_mutation(&app, state.rename(Path::new(&old_path), &new_title, allow_warnings)?))
 }
 
 #[command]
-pub fn delete_note(path: String) -> Result<(), String> {
-    trash::delete(&path)
-        .map_err(|e| format!("Failed to delete: {}", e))?;
+pub fn create_folder(state: tauri::State<'_, Persistence>, parent_path: String, name: String) -> Result<String, PersistenceError> {
+    state.create_folder(Path::new(&parent_path), &name)
+}
+
+#[command]
+pub fn rename_folder(app: tauri::AppHandle, state: tauri::State<'_, Persistence>, old_path: String, new_name: String, allow_warnings: bool) -> Result<String, PersistenceError> {
+    Ok(finish_mutation(&app, state.rename_folder(Path::new(&old_path), &new_name, allow_warnings)?))
+}
+
+#[command]
+pub fn delete_folder(app: tauri::AppHandle, state: tauri::State<'_, Persistence>, path: String) -> Result<(), PersistenceError> {
+    finish_mutation(&app, state.delete(Path::new(&path))?);
     Ok(())
-}
-
-#[command]
-pub fn rename_note(old_path: String, new_title: String) -> Result<String, String> {
-    let old = Path::new(&old_path);
-    let ext = old.extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    // If new_title already contains the extension, use it directly
-    let new_name = if new_title.ends_with(&format!(".{}",  ext)) {
-        new_title
-    } else {
-        format!("{}.{}", new_title, ext)
-    };
-    let new_path = old.parent()
-        .ok_or("Invalid path")?
-        .join(&new_name);
-    if new_path.exists() {
-        return Err("A file with that name already exists".to_string());
-    }
-    fs::rename(&old_path, &new_path)
-        .map_err(|e| format!("Failed to rename: {}", e))?;
-    Ok(new_path.to_string_lossy().to_string())
-}
-
-#[command]
-pub fn create_folder(parent_path: String, name: String) -> Result<String, String> {
-    let path = Path::new(&parent_path).join(&name);
-    fs::create_dir_all(&path)
-        .map_err(|e| format!("Failed to create folder: {}", e))?;
-    Ok(path.to_string_lossy().to_string())
-}
-
-#[command]
-pub fn rename_folder(old_path: String, new_name: String) -> Result<String, String> {
-    let path = Path::new(&old_path);
-    if !path.exists() {
-        return Err("Folder does not exist".to_string());
-    }
-    let new_path = path.parent()
-        .unwrap_or(path)
-        .join(&new_name);
-    if new_path.exists() {
-        return Err(format!("Folder already exists: {}", new_name));
-    }
-    fs::rename(&path, &new_path)
-        .map_err(|e| format!("Failed to rename folder: {}", e))?;
-    Ok(new_path.to_string_lossy().to_string())
-}
-
-#[command]
-pub fn delete_folder(path: String) -> Result<(), String> {
-    let p = Path::new(&path);
-    if !p.exists() {
-        return Err("Folder does not exist".to_string());
-    }
-    fs::remove_dir_all(p)
-        .map_err(|e| format!("Failed to delete folder: {}", e))
 }
 
 #[command]
@@ -443,54 +349,28 @@ pub fn open_in_terminal(path: String) -> Result<(), String> {
 }
 
 #[command]
-pub async fn search_notes(root_path: String, query: String) -> Vec<NoteMetadata> {
-    // 全文搜索代价高，后台线程池执行，避免阻塞 UI 主线程
-    tauri::async_runtime::spawn_blocking(move || search_notes_impl(root_path, query))
-        .await
-        .unwrap_or_default()
-}
-
-fn search_notes_impl(root_path: String, query: String) -> Vec<NoteMetadata> {
-    if query.is_empty() {
-        return storage::scan_notes(Path::new(&root_path));
-    }
-    let all_notes = storage::scan_notes(Path::new(&root_path));
-    let query_lower = query.to_lowercase();
-    let mut results: Vec<(NoteMetadata, u32)> = all_notes.into_iter()
-        .filter_map(|note| {
-            let mut score = 0u32;
-            if note.title.to_lowercase().contains(&query_lower) {
-                score += 100;
-                if note.title.to_lowercase().starts_with(&query_lower) {
-                    score += 50;
-                }
-            }
-            // PDF 为二进制，只按文件名匹配，避免为搜索白读整份大文件
-            if !note.path.to_lowercase().ends_with(".pdf") {
-                if let Ok(content) = fs::read_to_string(&note.path) {
-                    if content.to_lowercase().contains(&query_lower) {
-                        score += 10;
-                    }
-                }
-            }
-            if score > 0 { Some((note, score)) } else { None }
-        })
-        .collect();
-    results.sort_by(|a, b| b.1.cmp(&a.1));
-    results.into_iter().map(|(note, _)| note).collect()
+pub fn start_search_session(window: tauri::WebviewWindow, state: tauri::State<'_, crate::services::search::SearchState>) -> String {
+    state.open(window.label())
 }
 
 #[command]
-pub fn get_config() -> AppConfig {
-    let config_path = storage::get_config_dir().join("config.json");
-    if config_path.exists() {
-        if let Ok(content) = fs::read_to_string(&config_path) {
-            if let Ok(config) = serde_json::from_str::<AppConfig>(&content) {
-                return config;
-            }
-        }
-    }
-    AppConfig::default()
+pub fn invalidate_search(window: tauri::WebviewWindow, state: tauri::State<'_, crate::services::search::SearchState>, session_id: String, generation: u64) {
+    state.invalidate(window.label(), &session_id, generation);
+}
+
+#[command]
+pub async fn search_notes(window: tauri::WebviewWindow, state: tauri::State<'_, crate::services::search::SearchState>, session_id: String, generation: u64, root_path: String, query: String, extra_folders: Vec<String>) -> Result<Vec<NoteMetadata>, String> {
+    let Some(run) = state.begin(window.label(), &session_id, generation) else { return Ok(Vec::new()); };
+    tauri::async_runtime::spawn_blocking(move || {
+        if run.is_cancelled() || query.trim().is_empty() { return Ok(Vec::new()); }
+        let roots = scan::note_roots(std::iter::once(root_path).chain(extra_folders).collect(), &|| run.is_cancelled()).map_err(|error| format!("Search discovery failed: {error}"))?;
+        Ok(crate::services::search::search(&roots, &query, &run))
+    }).await.map_err(|error| format!("Search failed: {error}"))?
+}
+
+#[command]
+pub fn get_config() -> Result<AppConfig, String> {
+    storage::load_config(&storage::get_config_dir().join("config.json"))
 }
 
 #[command]
@@ -499,7 +379,7 @@ pub fn save_config(config: AppConfig) -> Result<(), String> {
     let config_path = config_dir.join("config.json");
     let content = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    fs::write(&config_path, content)
+    storage::write_atomic(&config_path, content)
         .map_err(|e| format!("Failed to save config: {}", e))?;
     Ok(())
 }
@@ -757,121 +637,44 @@ fn add_footnote_backlinks(html: String) -> String {
 }
 
 #[command]
-pub fn start_watching(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    use crate::services::watcher;
-    use std::sync::mpsc;
-    use std::sync::{Mutex, OnceLock};
-
-    // 同一时刻只保留一个 watcher：配置变化重新监听时先停掉旧的，避免事件翻倍
-    static PREV_TX: OnceLock<Mutex<Option<mpsc::Sender<()>>>> = OnceLock::new();
-    let slot = PREV_TX.get_or_init(|| Mutex::new(None));
-    if let Some(prev) = slot.lock().unwrap().take() {
-        let _ = prev.send(());
-    }
-
-    let (tx, rx) = mpsc::channel::<()>();
-    *slot.lock().unwrap() = Some(tx);
-
-    std::thread::spawn(move || {
-        let _watcher = match watcher::start_watcher(app_handle, &paths) {
-            Some(w) => w,
-            None => return,
-        };
-        // 阻塞等待配置变化/退出信号；线程退出后 watcher 被 drop，自动取消监听
-        let _ = rx.recv();
-    });
-    Ok(())
+pub async fn start_watching(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
+    use crate::services::watcher::{self, WatcherState};
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<WatcherState>();
+        if paths.iter().all(String::is_empty) { return state.stop(); }
+        state.replace_with(|| watcher::start_watcher(app_handle.clone(), &paths))
+    }).await.map_err(|error| format!("Watcher initialization failed: {error}"))?
 }
 
 // ===== Version History =====
 
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct VersionEntry {
-    pub timestamp: String,
-    pub filename: String,
-    pub size: u64,
+#[command]
+pub async fn save_version(app: tauri::AppHandle, note_path: String, document_id: String, content: String, password: Option<String>) -> Result<VersionEntry, PersistenceError> {
+    run_persistence(app, move |state| match password {
+        Some(password) => state.save_encrypted_version(Path::new(&note_path), &document_id, &content, &password),
+        None => state.save_version(Path::new(&note_path), &document_id, &content),
+    }).await
 }
 
 #[command]
-pub fn save_version(note_path: String, content: String) -> Result<(), String> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    note_path.hash(&mut hasher);
-    let hash = format!("{:x}", hasher.finish());
-    let versions_dir = storage::get_config_dir().join("versions").join(&hash);
-    fs::create_dir_all(&versions_dir)
-        .map_err(|e| format!("Failed to create versions dir: {}", e))?;
-    let mut entries: Vec<_> = fs::read_dir(&versions_dir)
-        .map_err(|e| format!("Failed to read versions dir: {}", e))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-    if let Some(latest) = entries.last() {
-        if let Ok(latest_content) = fs::read_to_string(latest.path()) {
-            if latest_content == content {
-                return Ok(());
-            }
-        }
-    }
-    if entries.len() >= 20 {
-        if let Some(oldest) = entries.first() {
-            let _ = fs::remove_file(oldest.path());
-        }
-    }
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-    let version_file = versions_dir.join(format!("{}.md", timestamp));
-    fs::write(&version_file, &content)
-        .map_err(|e| format!("Failed to save version: {}", e))?;
-    Ok(())
+pub async fn list_versions(app: tauri::AppHandle, note_path: String) -> Result<Vec<VersionEntry>, PersistenceError> {
+    run_persistence(app, move |state| state.list_versions(Path::new(&note_path))).await
 }
 
 #[command]
-pub fn list_versions(note_path: String) -> Vec<VersionEntry> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    note_path.hash(&mut hasher);
-    let hash = format!("{:x}", hasher.finish());
-    let versions_dir = storage::get_config_dir().join("versions").join(&hash);
-    if !versions_dir.exists() {
-        return Vec::new();
-    }
-    let mut entries: Vec<VersionEntry> = fs::read_dir(&versions_dir)
-        .unwrap_or_else(|_| fs::read_dir(".").unwrap())
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
-        .filter_map(|e| {
-            let metadata = e.metadata().ok()?;
-            let filename = e.file_name().to_string_lossy().to_string();
-            let timestamp = filename.trim_end_matches(".md").to_string();
-            Some(VersionEntry { timestamp, filename, size: metadata.len() })
-        })
-        .collect();
-    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    entries
+pub async fn get_version(app: tauri::AppHandle, note_path: String, document_id: String, version_filename: String, password: Option<String>) -> Result<String, PersistenceError> {
+    run_persistence(app, move |state| match password {
+        Some(password) => state.get_encrypted_version(Path::new(&note_path), &document_id, &version_filename, &password),
+        None => state.get_version(Path::new(&note_path), &document_id, &version_filename),
+    }).await
 }
 
 #[command]
-pub fn get_version(note_path: String, version_filename: String) -> Result<String, String> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    note_path.hash(&mut hasher);
-    let hash = format!("{:x}", hasher.finish());
-    let version_file = storage::get_config_dir()
-        .join("versions").join(&hash).join(&version_filename);
-    fs::read_to_string(&version_file)
-        .map_err(|e| format!("Failed to read version: {}", e))
-}
-
-#[command]
-pub fn restore_version(note_path: String, version_filename: String) -> Result<(), String> {
-    let content = get_version(note_path.clone(), version_filename)?;
-    fs::write(&note_path, &content)
-        .map_err(|e| format!("Failed to restore version: {}", e))?;
-    Ok(())
+pub async fn restore_version(app: tauri::AppHandle, note_path: String, document_id: String, version_filename: String, password: Option<String>) -> Result<(), PersistenceError> {
+    run_persistence(app, move |state| match password {
+        Some(password) => state.restore_encrypted_version(Path::new(&note_path), &document_id, &version_filename, &password),
+        None => state.restore_version(Path::new(&note_path), &document_id, &version_filename),
+    }).await
 }
 
 // ===== Image Paste =====
@@ -889,7 +692,7 @@ pub fn save_image(note_path: String, image_data: Vec<u8>, extension: String) -> 
     let filename = format!("img_{}.{}", id.as_simple(), extension);
     let file_path = images_dir.join(&filename);
 
-    fs::write(&file_path, &image_data)
+    storage::write_atomic(&file_path, &image_data)
         .map_err(|e| format!("Failed to write image: {}", e))?;
 
     let relative_path = format!("i/{}", filename);
@@ -1011,7 +814,7 @@ pub fn save_sort_order(root_path: String, folder: String, order: Vec<String>) ->
 
     let content = serde_json::to_string_pretty(&all_orders)
         .map_err(|e| format!("Failed to serialize sort order: {}", e))?;
-    fs::write(&sort_file, content)
+    storage::write_atomic(&sort_file, content)
         .map_err(|e| format!("Failed to save sort order: {}", e))?;
     Ok(())
 }
@@ -1043,32 +846,13 @@ pub fn get_sort_order(root_path: String, folder: String) -> Vec<String> {
 // ===== Pin Management =====
 
 #[command]
-pub fn get_pinned_notes() -> Vec<String> {
-    let pins_path = storage::get_config_dir().join("pins.json");
-    if pins_path.exists() {
-        if let Ok(content) = fs::read_to_string(&pins_path) {
-            if let Ok(pins) = serde_json::from_str::<Vec<String>>(&content) {
-                return pins;
-            }
-        }
-    }
-    Vec::new()
+pub fn get_pinned_notes(state: tauri::State<'_, Persistence>) -> Result<Vec<String>, PersistenceError> {
+    state.pins()
 }
 
 #[command]
-pub fn toggle_pin(note_path: String) -> Result<Vec<String>, String> {
-    let mut pins = get_pinned_notes();
-    if pins.contains(&note_path) {
-        pins.retain(|p| p != &note_path);
-    } else {
-        pins.push(note_path);
-    }
-    let pins_path = storage::get_config_dir().join("pins.json");
-    let content = serde_json::to_string_pretty(&pins)
-        .map_err(|e| format!("Failed to serialize pins: {}", e))?;
-    fs::write(&pins_path, content)
-        .map_err(|e| format!("Failed to save pins: {}", e))?;
-    Ok(pins)
+pub fn toggle_pin(state: tauri::State<'_, Persistence>, note_path: String) -> Result<Vec<String>, PersistenceError> {
+    state.toggle_pin(Path::new(&note_path))
 }
 
 // ===== Image Upload =====
@@ -1137,135 +921,96 @@ pub fn get_sync_status(path: String) -> String {
 
 // ===== Encryption =====
 
-#[command]
-pub async fn encrypt_note(path: String, password: String) -> Result<(), String> {
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-    let encrypted = encryption::encrypt(&content, &password)?;
-    let encrypted_path = format!("{}.encrypted", path);
-    fs::write(&encrypted_path, &encrypted)
-        .map_err(|e| format!("Failed to write encrypted file: {}", e))?;
-    fs::remove_file(&path)
-        .map_err(|e| format!("Failed to delete original file: {}", e))?;
-    Ok(())
+async fn run_persistence<T: Send + 'static>(app: tauri::AppHandle, operation: impl FnOnce(&Persistence) -> Result<T, PersistenceError> + Send + 'static) -> Result<T, PersistenceError> {
+    tauri::async_runtime::spawn_blocking(move || operation(&app.state::<Persistence>()))
+        .await.map_err(|error| PersistenceError::new("Unavailable", format!("Document worker failed: {error}"), &[]))?
 }
 
 #[command]
-pub async fn decrypt_note(path: String, password: String) -> Result<String, String> {
-    let data = fs::read(&path)
-        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
-    encryption::decrypt(&data, &password)
+pub async fn encrypt_note(app: tauri::AppHandle, path: String, password: String, expected_version: Option<String>) -> Result<NoteContent, PersistenceError> {
+    let mut outcome = run_persistence(app.clone(), move |state| state.set_encryption(Path::new(&path), &password, true, expected_version.as_deref())).await?;
+    let snapshot = outcome.snapshot.take().unwrap();
+    finish_mutation(&app, outcome);
+    Ok(snapshot)
 }
 
 #[command]
-pub async fn verify_password(path: String, password: String) -> Result<bool, String> {
-    let data = fs::read(&path)
-        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
-    match encryption::decrypt(&data, &password) {
+pub async fn decrypt_note(app: tauri::AppHandle, path: String, password: String) -> Result<NoteContent, PersistenceError> {
+    run_persistence(app, move |state| state.read_encrypted_document(Path::new(&path), &password)).await
+}
+
+#[command]
+pub async fn verify_password(app: tauri::AppHandle, path: String, password: String) -> Result<bool, PersistenceError> {
+    match run_persistence(app, move |state| state.read_encrypted_document(Path::new(&path), &password)).await {
         Ok(_) => Ok(true),
-        Err(e) if e.contains("Invalid password") => Ok(false),
-        Err(e) => Err(e),
+        Err(error) if error.code == "Encryption" && error.message.contains("Invalid password") => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
 #[command]
-pub async fn save_encrypted_note(path: String, content: String, password: String) -> Result<(), String> {
-    let encrypted = encryption::encrypt(&content, &password)?;
-    // path should be the .md.encrypted file path
-    let encrypted_path = if path.ends_with(".encrypted") {
-        path.clone()
-    } else {
-        format!("{}.encrypted", path)
-    };
-    if let Some(parent) = Path::new(&encrypted_path).parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
+pub async fn save_encrypted_note(app: tauri::AppHandle, path: String, content: String, password: String, expected_version: String) -> Result<String, PersistenceError> {
+    run_persistence(app, move |state| state.write_encrypted_document(Path::new(&path), &content, &password, &expected_version)).await
+}
+
+#[command]
+pub async fn remove_encryption(app: tauri::AppHandle, path: String, password: String, expected_version: Option<String>) -> Result<NoteContent, PersistenceError> {
+    let mut outcome = run_persistence(app.clone(), move |state| state.set_encryption(Path::new(&path), &password, false, expected_version.as_deref())).await?;
+    let snapshot = outcome.snapshot.take().unwrap();
+    finish_mutation(&app, outcome);
+    Ok(snapshot)
+}
+
+#[command]
+pub fn move_note(app: tauri::AppHandle, state: tauri::State<'_, Persistence>, source_path: String, target_folder: String, allow_warnings: bool) -> Result<String, PersistenceError> {
+    Ok(finish_mutation(&app, state.move_note(Path::new(&source_path), Path::new(&target_folder), allow_warnings)?))
+}
+
+#[command]
+pub async fn write_log(message: String) -> Result<(), String> {
+    write_logs(vec![message]).await
+}
+
+#[command]
+pub async fn write_logs(messages: Vec<String>) -> Result<(), String> {
+    crate::services::logging::validate_batch(&messages)?;
+    if messages.is_empty() {
+        return Ok(());
     }
-    fs::write(&encrypted_path, &encrypted)
-        .map_err(|e| format!("Failed to write encrypted file: {}", e))?;
-    Ok(())
-}
-
-#[command]
-pub async fn remove_encryption(path: String, password: String) -> Result<(), String> {
-    // path is the .md.encrypted file
-    let data = fs::read(&path)
-        .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
-    let content = encryption::decrypt(&data, &password)?;
-    // Write plaintext to .md file (strip .encrypted suffix)
-    let md_path = path.trim_end_matches(".encrypted").to_string();
-    fs::write(&md_path, &content)
-        .map_err(|e| format!("Failed to write plaintext file: {}", e))?;
-    fs::remove_file(&path)
-        .map_err(|e| format!("Failed to delete encrypted file: {}", e))?;
-    Ok(())
-}
-
-#[command]
-pub fn move_note(source_path: String, target_folder: String) -> Result<String, String> {
-    let src = Path::new(&source_path);
-    let file_name = src.file_name().ok_or("Invalid source path".to_string())?;
-    let dest = Path::new(&target_folder).join(file_name);
-    if dest.exists() {
-        return Err("Target file already exists".to_string());
-    }
-    fs::rename(&src, &dest)
-        .map_err(|e| format!("Failed to move: {}", e))?;
-    Ok(dest.to_string_lossy().to_string())
-}
-
-#[command]
-pub fn write_log(message: String) -> Result<(), String> {
-    // 日志统一写到 ~/.miaoyan/log，不落在笔记文库内避免污染用户目录
-    let log_dir = match dirs::home_dir() {
-        Some(home) => home.join(".miaoyan").join("log"),
-        None => storage::get_config_dir().join("log"),
-    };
-    fs::create_dir_all(&log_dir)
-        .map_err(|e| format!("Failed to create log dir: {}", e))?;
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let log_file = log_dir.join(format!("{}.log", today));
-    let timestamp = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-    let line = format!("[{}] {}\n", timestamp, message);
-    use std::io::Write;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_file)
-        .map_err(|e| format!("Failed to open log file: {}", e))?;
-    file.write_all(line.as_bytes())
-        .map_err(|e| format!("Failed to write log: {}", e))?;
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || {
+        // 日志不落在笔记文库内；路径解析和全部 IO 均留在 blocking pool。
+        let log_dir = match dirs::home_dir() {
+            Some(home) => home.join(".miaoyan").join("log"),
+            None => storage::get_config_dir().join("log"),
+        };
+        crate::services::logging::write_batch(&log_dir, chrono::Local::now().fixed_offset(), &messages)
+    })
+    .await
+    .map_err(|error| format!("Log task failed: {error}"))?
 }
 
 /* ── Annotations ── */
 
-fn annotations_path(note_path: &str) -> String {
-    let p = Path::new(note_path);
-    let stem = p.file_stem().unwrap_or_default().to_string_lossy();
-    let parent = p.parent().unwrap_or(Path::new(""));
-    parent.join(format!("{}.annotations.json", stem)).to_string_lossy().to_string()
+#[command]
+pub async fn read_annotations(app: tauri::AppHandle, note_path: String, password: Option<String>) -> Result<AnnotationRead, PersistenceError> {
+    run_persistence(app, move |state| match password {
+        Some(password) => state.read_encrypted_annotations(Path::new(&note_path), &password),
+        None => state.read_annotations(Path::new(&note_path)),
+    }).await
 }
 
 #[command]
-pub fn read_annotations(note_path: String) -> String {
-    let path = annotations_path(&note_path);
-    fs::read_to_string(&path).unwrap_or_else(|_| "[]".to_string())
+pub async fn write_annotations(app: tauri::AppHandle, note_path: String, document_id: String, json: String, expected_version: String, password: Option<String>) -> Result<String, PersistenceError> {
+    run_persistence(app, move |state| match password {
+        Some(password) => state.write_encrypted_annotations_checked(Path::new(&note_path), &document_id, &json, &password, &expected_version),
+        None => state.write_annotations_checked(Path::new(&note_path), &document_id, &json, &expected_version),
+    }).await
 }
 
 #[command]
-pub fn write_annotations(note_path: String, json: String) -> Result<(), String> {
-    let path = annotations_path(&note_path);
-    fs::write(&path, &json)
-        .map_err(|e| format!("Failed to write annotations: {}", e))
-}
-
-#[command]
-pub fn delete_annotations(note_path: String) -> Result<(), String> {
-    let path = annotations_path(&note_path);
-    if Path::new(&path).exists() {
-        fs::remove_file(&path)
-            .map_err(|e| format!("Failed to delete annotations: {}", e))?;
-    }
-    Ok(())
+pub async fn delete_annotations(app: tauri::AppHandle, note_path: String, document_id: String, expected_version: String, password: Option<String>) -> Result<String, PersistenceError> {
+    run_persistence(app, move |state| match password {
+        Some(password) => state.write_encrypted_annotations_checked(Path::new(&note_path), &document_id, "[]", &password, &expected_version),
+        None => state.write_annotations_checked(Path::new(&note_path), &document_id, "[]", &expected_version),
+    }).await
 }

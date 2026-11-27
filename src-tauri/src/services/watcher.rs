@@ -1,272 +1,968 @@
-use notify::event::{ModifyKind, RenameMode};
-use notify::{Watcher, RecursiveMode, Event, EventKind};
-use std::collections::HashMap;
+use crate::services::storage;
+use notify::event::{ModifyKind, RemoveKind, RenameMode};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
-use crate::services::storage;
 
-/// 判断路径相对监听根的部分是否落在忽略目录中。
-/// 只检查根以下的层级，避免把隐藏的监听根本身（如 .multica）误判为忽略目录。
+const RENAME_TTL: Duration = Duration::from_secs(1);
+const MAX_PENDING_RENAMES: usize = 256;
+const COALESCE_WINDOW: Duration = Duration::from_millis(200);
+const MAX_PENDING_EVENTS: usize = 1024;
+
+/// Most-specific explicit root wins, including selected hidden roots.
 fn under_ignored_relative(pb: &Path, roots: &[PathBuf]) -> bool {
-    let rel = roots
+    roots
         .iter()
-        .find_map(|r| pb.strip_prefix(r).ok())
-        .unwrap_or(pb);
-    rel.components()
-        .any(|c| storage::is_ignored_dir(&c.as_os_str().to_string_lossy()))
+        .filter_map(|r| pb.strip_prefix(r).ok())
+        .min_by_key(|p| p.components().count())
+        .map(|rel| {
+            rel.components()
+                .any(|c| storage::is_ignored_dir(&c.as_os_str().to_string_lossy()))
+        })
+        .unwrap_or(true)
 }
 
-/// 文件是否为笔记相关文件（扩展名白名单）
 fn is_note_file(pb: &Path) -> bool {
-    let name = pb.file_name().unwrap_or_default().to_string_lossy();
-    if name.starts_with('.') || name.ends_with(".swp") || name.ends_with(".tmp") || name.ends_with('~') {
-        return false;
-    }
-    let ext = pb.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-    matches!(ext.as_str(), "md" | "markdown" | "txt" | "html" | "htm" | "pdf") || name.ends_with(".md.encrypted")
+    storage::is_note_file(pb)
 }
 
-/// 目录的普通 Modify 事件只代表「某个子项变了」——Windows 对目录内任意文件的
-/// 新建/删除/重命名都会上报父目录 Modify。子项自身已有独立事件，若把它当作
-/// 结构变化处理，一次普通文件变更就会触发整棵目录树全量重扫。
+/// Windows directory Modify means a child changed, not a structural change.
 fn is_child_change_noise(kind: &EventKind, is_dir: bool) -> bool {
-    is_dir
-        && matches!(kind, EventKind::Modify(kind) if !matches!(kind, ModifyKind::Name(_)))
+    is_dir && matches!(kind, EventKind::Modify(kind) if !matches!(kind, ModifyKind::Name(_)))
 }
 
-/// 目录结构事件（目录新建/重命名/路径移除）单独走 fs-structure，
-/// 前端按已知路径做增量增删换行，不再全量扫描
-fn emit_structure(
-    app: &AppHandle,
-    kind: &str,
-    path: Option<&str>,
-    from: Option<&str>,
-    to: Option<&str>,
-) {
-    let _ = app.emit(
-        "fs-structure",
-        serde_json::json!({ "kind": kind, "path": path, "from": from, "to": to }),
-    );
-}
-
-/// 取出 1 秒内挂起的重命名源路径（Windows 把 From/To 拆成两条事件上报）
-fn take_pending_rename(pending: &mut Vec<(String, Instant)>) -> Option<String> {
-    pending.retain(|(_, at)| at.elapsed() < Duration::from_millis(1000));
-    if pending.is_empty() {
-        None
-    } else {
-        Some(pending.remove(0).0)
-    }
-}
-
-/// 事件类型合并优先级：remove > create > modify（同一路径窗口内多次事件取最具破坏性的）
+/// Preserve create through modifications, but a later observation of existence
+/// supersedes remove (atomic-save/replacement), not the other way round.
 fn merge_event_type(old: &str, new: &str) -> &'static str {
-    if old == "remove" || new == "remove" {
-        return "remove";
+    match new {
+        "remove" => "remove",
+        "create" => "create",
+        _ if old == "create" => "create",
+        _ => "modify",
     }
-    if old == "create" && new == "create" {
-        return "create";
-    }
-    // create+modify 保持 create；其余组合视为 modify
-    if (old == "create" && new == "modify") || (old == "modify" && new == "create") {
-        return "create";
-    }
-    "modify"
 }
 
-pub fn start_watcher(
-    app_handle: AppHandle,
-    paths: &[String],
-) -> Option<notify::RecommendedWatcher> {
-    let handle = app_handle.clone();
-    let roots: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
-    let roots_for_cb = roots.clone();
+#[derive(Debug, PartialEq, Eq)]
+enum Output {
+    File(&'static str, PathBuf),
+    Structure {
+        kind: &'static str,
+        path: Option<PathBuf>,
+        from: Option<PathBuf>,
+        to: Option<PathBuf>,
+    },
+}
 
-    // 事件合流：notify 对单次写盘会发出多个 Modify 事件（Data/Content/Metadata），
-    // 且自动保存 1.5s 一次——在 200ms 窗口内按路径去重合并后再 emit，
-    // 避免前端连续收到重复事件、重复走过滤与防抖链路
-    let (evt_tx, evt_rx) = mpsc::channel::<(String, &'static str)>();
-    let handle_for_coalescer = handle.clone();
-    std::thread::spawn(move || {
-        let window = Duration::from_millis(200);
-        let mut pending: HashMap<String, &'static str> = HashMap::new();
-        let mut first_at: Option<Instant> = None;
-        loop {
-            let timeout = first_at.map(|t| window.saturating_sub(t.elapsed()));
-            match evt_rx.recv_timeout(timeout.unwrap_or(Duration::from_secs(3600))) {
-                Ok((path, etype)) => {
-                    if first_at.is_none() {
-                        first_at = Some(Instant::now());
-                    }
-                    pending
-                        .entry(path)
-                        .and_modify(|e| *e = merge_event_type(e, etype))
-                        .or_insert(etype);
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // 窗口到期：批量 emit 合并后的事件
-                    if !pending.is_empty() {
-                        // 多路径事件类型可能不同，逐类型分组 emit（与旧格式兼容）
-                        let mut by_type: HashMap<&'static str, Vec<String>> = HashMap::new();
-                        for (p, t) in pending.drain() {
-                            by_type.entry(t).or_default().push(p);
-                        }
-                        for (event_type, ps) in by_type {
-                            let _ = handle_for_coalescer.emit(
-                                "fs-change",
-                                serde_json::json!({ "type": event_type, "paths": ps }),
-                            );
-                        }
-                    }
-                    first_at = None;
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
+impl Output {
+    fn structure(kind: &'static str, path: &Path) -> Self {
+        Self::Structure {
+            kind,
+            path: Some(path.to_path_buf()),
+            from: None,
+            to: None,
         }
-    });
+    }
+}
 
-    let handle_for_watcher = handle.clone();
-    let mut pending_renames: Vec<(String, Instant)> = Vec::new();
+struct RenameSource {
+    path: PathBuf,
+    tracker: Option<usize>,
+    at: Instant,
+}
 
-    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-        let Ok(event) = res else { return; };
+#[derive(Default)]
+struct PendingRenames(VecDeque<RenameSource>);
 
+impl PendingRenames {
+    fn deadline(&self) -> Option<Instant> {
+        self.0.front().map(|source| source.at + RENAME_TTL)
+    }
+
+    fn expire(&mut self, now: Instant) -> Vec<PathBuf> {
+        let mut expired = Vec::new();
+        while self.deadline().map(|at| at <= now).unwrap_or(false) {
+            expired.push(self.0.pop_front().unwrap().path);
+        }
+        expired
+    }
+
+    fn push(&mut self, source: RenameSource) -> Option<PathBuf> {
+        let evicted = if self.0.len() >= MAX_PENDING_RENAMES {
+            self.0.pop_front().map(|s| s.path)
+        } else {
+            None
+        };
+        self.0.push_back(source);
+        evicted
+    }
+
+    fn take(&mut self, to: &Path, tracker: Option<usize>, adjacent: bool) -> Option<PathBuf> {
+        let index = if let Some(tracker) = tracker {
+            // Never substitute FIFO for a missing/mismatched notify tracker.
+            let mut matches = self
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.tracker == Some(tracker));
+            let index = matches.next()?.0;
+            if matches.next().is_some() {
+                return None;
+            }
+            index
+        } else {
+            // Trackerless platforms: only a single, immediately adjacent source
+            // in the same parent is safe enough. Moves/ambiguity degrade to
+            // remove + create, not a potentially destructive wrong dir-rename.
+            if !adjacent || self.0.len() != 1 {
+                return None;
+            }
+            let source = self.0.front()?;
+            if source.tracker.is_some() || source.path.parent() != to.parent() {
+                return None;
+            }
+            0
+        };
+        self.0.remove(index).map(|s| s.path)
+    }
+}
+
+struct EventState {
+    roots: Vec<PathBuf>,
+    renames: PendingRenames,
+    previous_was_from: bool,
+}
+
+impl EventState {
+    fn new(roots: Vec<PathBuf>) -> Self {
+        Self {
+            roots,
+            renames: PendingRenames::default(),
+            previous_was_from: false,
+        }
+    }
+
+    fn visible(&self, path: &Path) -> bool {
+        !under_ignored_relative(path, &self.roots)
+    }
+
+    fn created(&self, path: &Path, output: &mut Vec<Output>) {
+        if !self.visible(path) {
+            return;
+        }
+        if path.is_dir() {
+            output.push(Output::structure("dir-create", path));
+        } else if is_note_file(path) {
+            output.push(Output::File("create", path.to_path_buf()));
+        }
+    }
+
+    fn removed(&self, path: &Path, directory: bool, output: &mut Vec<Output>) {
+        if !self.visible(path) {
+            return;
+        }
+        if directory || !is_note_file(path) {
+            output.push(Output::structure("path-remove", path));
+        } else {
+            output.push(Output::File("remove", path.to_path_buf()));
+        }
+    }
+
+    fn expired_source(&self, path: &Path, output: &mut Vec<Output>) {
+        if !self.visible(path) {
+            return;
+        }
+        // A replacement may already occupy the source name by the deadline.
+        if path.exists() {
+            self.created(path, output);
+            return;
+        }
+        // Its old type is unknown, including directories named *.md.
+        output.push(Output::structure("path-remove", path));
+        if is_note_file(path) {
+            output.push(Output::File("remove", path.to_path_buf()));
+        }
+    }
+
+    fn expire(&mut self, now: Instant) -> Vec<Output> {
+        let mut output = Vec::new();
+        for path in self.renames.expire(now) {
+            self.expired_source(&path, &mut output);
+        }
+        output
+    }
+
+    fn renamed(&self, from: &Path, to: &Path, output: &mut Vec<Output>) {
+        let directory = to.is_dir();
+        if self.visible(from) && self.visible(to) && directory {
+            output.push(Output::Structure {
+                kind: "dir-rename",
+                path: None,
+                from: Some(from.to_path_buf()),
+                to: Some(to.to_path_buf()),
+            });
+        } else {
+            // Each side is filtered independently: normal -> ignored removes,
+            // ignored -> normal creates. Also handles supported -> other ext.
+            self.removed(from, directory, output);
+            self.created(to, output);
+        }
+    }
+
+    fn process(&mut self, event: Event, now: Instant) -> Vec<Output> {
+        let mut output = self.expire(now);
+        let adjacent = self.previous_was_from;
+        self.previous_was_from = matches!(
+            event.kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::From))
+        );
         match event.kind {
             EventKind::Create(_) => {
-                for p in &event.paths {
-                    let pb = Path::new(p);
-                    if under_ignored_relative(pb, &roots_for_cb) {
-                        continue;
-                    }
-                    if pb.is_dir() {
-                        emit_structure(&handle_for_watcher, "dir-create", Some(&p.to_string_lossy()), None, None);
-                    } else if is_note_file(pb) {
-                        let _ = evt_tx.send((p.to_string_lossy().to_string(), "create"));
-                    }
+                for path in &event.paths {
+                    self.created(path, &mut output);
                 }
             }
-            EventKind::Modify(ModifyKind::Name(mode)) => {
-                match mode {
-                    RenameMode::Both => {
-                        // macOS/Linux 单事件带 [from, to] 两个路径
-                        if event.paths.len() >= 2 {
-                            let from = event.paths[0].to_string_lossy().to_string();
-                            let to = event.paths[1].to_string_lossy().to_string();
-                            if !under_ignored_relative(Path::new(&from), &roots_for_cb)
-                                && !under_ignored_relative(Path::new(&to), &roots_for_cb)
-                            {
-                                if Path::new(&to).is_dir() {
-                                    emit_structure(&handle_for_watcher, "dir-rename", None, Some(&from), Some(&to));
-                                } else if is_note_file(Path::new(&to)) {
-                                    let _ = evt_tx.send((from, "remove"));
-                                    let _ = evt_tx.send((to, "create"));
-                                }
-                            }
-                        }
+            EventKind::Modify(ModifyKind::Name(mode)) => match mode {
+                RenameMode::Both => {
+                    if let [from, to, ..] = event.paths.as_slice() {
+                        self.renamed(from, to, &mut output);
                     }
-                    RenameMode::From => {
-                        for p in &event.paths {
-                            let pb = Path::new(p);
-                            if under_ignored_relative(pb, &roots_for_cb) {
-                                continue;
-                            }
-                            // 改名后源路径已不存在，无法判断原本是否目录：
-                            // 先挂起等待 To 配对；笔记源路径同时按删除上报，
-                            // 保证配对失败时旧行也不会残留
-                            if is_note_file(pb) {
-                                let _ = evt_tx.send((p.to_string_lossy().to_string(), "remove"));
-                            }
-                            pending_renames.push((p.to_string_lossy().to_string(), Instant::now()));
-                        }
-                    }
-                    RenameMode::To => {
-                        for p in &event.paths {
-                            let pb = Path::new(p);
-                            if under_ignored_relative(pb, &roots_for_cb) {
-                                continue;
-                            }
-                            let path = p.to_string_lossy().to_string();
-                            if pb.is_dir() {
-                                match take_pending_rename(&mut pending_renames) {
-                                    Some(from) => emit_structure(
-                                        &handle_for_watcher, "dir-rename", None, Some(&from), Some(&path),
-                                    ),
-                                    None => emit_structure(
-                                        &handle_for_watcher, "dir-create", Some(&path), None, None,
-                                    ),
-                                }
-                            } else if is_note_file(pb) {
-                                let _ = take_pending_rename(&mut pending_renames);
-                                let _ = evt_tx.send((path, "create"));
-                            } else {
-                                let _ = take_pending_rename(&mut pending_renames);
-                            }
-                        }
-                    }
-                    RenameMode::Any | RenameMode::Other => {
-                        for p in &event.paths {
-                            let pb = Path::new(p);
-                            if under_ignored_relative(pb, &roots_for_cb) {
-                                continue;
-                            }
-                            let path = p.to_string_lossy().to_string();
-                            if pb.is_dir() {
-                                emit_structure(&handle_for_watcher, "dir-create", Some(&path), None, None);
-                            } else if is_note_file(pb) {
-                                let _ = evt_tx.send((path, "create"));
-                            }
+                }
+                RenameMode::From => {
+                    for path in &event.paths {
+                        // Keep ignored sources too: their matching To must not steal
+                        // another source from the queue.
+                        if let Some(path) = self.renames.push(RenameSource {
+                            path: path.clone(),
+                            tracker: event.tracker(),
+                            at: now,
+                        }) {
+                            self.expired_source(&path, &mut output);
                         }
                     }
                 }
-            }
+                RenameMode::To => {
+                    for path in &event.paths {
+                        if let Some(from) = self.renames.take(path, event.tracker(), adjacent) {
+                            self.renamed(&from, path, &mut output);
+                        } else {
+                            self.created(path, &mut output);
+                        }
+                    }
+                }
+                RenameMode::Any | RenameMode::Other => {
+                    for path in &event.paths {
+                        if path.exists() {
+                            self.created(path, &mut output);
+                        } else {
+                            self.expired_source(path, &mut output);
+                        }
+                    }
+                }
+            },
             EventKind::Modify(_) => {
-                for p in &event.paths {
-                    let pb = Path::new(p);
-                    if under_ignored_relative(pb, &roots_for_cb) {
-                        continue;
-                    }
-                    if is_child_change_noise(&event.kind, pb.is_dir()) {
-                        continue;
-                    }
-                    if is_note_file(pb) {
-                        let _ = evt_tx.send((p.to_string_lossy().to_string(), "modify"));
+                for path in &event.paths {
+                    if self.visible(path)
+                        && !is_child_change_noise(&event.kind, path.is_dir())
+                        && is_note_file(path)
+                    {
+                        output.push(Output::File("modify", path.clone()));
                     }
                 }
             }
-            EventKind::Remove(_) => {
-                for p in &event.paths {
-                    let pb = Path::new(p);
-                    if under_ignored_relative(pb, &roots_for_cb) {
-                        continue;
-                    }
-                    if is_note_file(pb) {
-                        let _ = evt_tx.send((p.to_string_lossy().to_string(), "remove"));
+            EventKind::Remove(kind) => {
+                for path in &event.paths {
+                    if matches!(kind, RemoveKind::Any | RemoveKind::Other) {
+                        self.expired_source(path, &mut output);
+                    } else if path.is_dir() {
+                        self.created(path, &mut output);
                     } else {
-                        // 删除后的目录无法再 is_dir()：把非笔记路径交给前端，
-                        // 由前端按已知目录/笔记前缀判断是否为目录移除
-                        emit_structure(&handle_for_watcher, "path-remove", Some(&p.to_string_lossy()), None, None);
+                        self.removed(path, kind == RemoveKind::Folder, &mut output);
                     }
                 }
             }
             _ => {}
         }
-    }).ok()?;
-
-    watch_roots(&mut watcher, &roots);
-
-    Some(watcher)
+        output
+    }
 }
 
-/// 每个根目录只注册一条递归监听。
-/// 逐目录监听会为每个子目录持有句柄，Windows 上会阻止父目录重命名/删除
-/// （ERROR_ACCESS_DENIED），用户无法在资源管理器里整理笔记库。
-fn watch_roots<W: Watcher>(watcher: &mut W, roots: &[PathBuf]) {
-    for root in roots {
-        if root.exists() {
-            let _ = watcher.watch(root, RecursiveMode::Recursive);
+#[derive(Default)]
+struct FileBatch {
+    pending: HashMap<PathBuf, &'static str>,
+    first_at: Option<Instant>,
+}
+impl FileBatch {
+    fn add(&mut self, path: PathBuf, kind: &'static str, now: Instant) {
+        self.first_at.get_or_insert(now);
+        self.pending
+            .entry(path)
+            .and_modify(|old| *old = merge_event_type(old, kind))
+            .or_insert(kind);
+    }
+    fn deadline(&self) -> Option<Instant> {
+        self.first_at.map(|at| at + COALESCE_WINDOW)
+    }
+    fn flush(&mut self) -> Vec<Output> {
+        self.first_at = None;
+        self.pending
+            .drain()
+            .map(|(path, kind)| {
+                // Spot-check removals only, never rescan a root. Protect against
+                // missing/reordered native create events during atomic replacement.
+                let kind = if kind == "remove" && path.is_file() {
+                    "modify"
+                } else {
+                    kind
+                };
+                Output::File(kind, path)
+            })
+            .collect()
+    }
+}
+
+/// One blocking consumer owns both deadlines; no callback-local expiry that
+/// depends on a later To, and no idle polling or full-library rescan.
+fn run_events(rx: mpsc::Receiver<Event>, roots: Vec<PathBuf>, overflow: Arc<AtomicBool>, mut emit: impl FnMut(Vec<Output>)) {
+    let mut state = EventState::new(roots);
+    let mut batch = FileBatch::default();
+    let mut incoming = Vec::new();
+    loop {
+        if overflow.swap(false, Ordering::AcqRel) {
+            emit(state.roots.iter().map(|root| Output::File("rescan", root.clone())).collect());
         }
+        let now = Instant::now();
+        incoming.extend(state.expire(now));
+        let mut structure = Vec::new();
+        for output in incoming.drain(..) {
+            match output {
+                Output::File(kind, path) => {
+                    batch.add(path, kind, now);
+                    if batch.pending.len() >= MAX_PENDING_EVENTS { emit(batch.flush()); }
+                },
+                output => structure.push(output),
+            }
+        }
+        if !structure.is_empty() {
+            emit(structure);
+        }
+        if batch.pending.len() >= MAX_PENDING_EVENTS || batch.deadline().map(|at| at <= now).unwrap_or(false) {
+            emit(batch.flush());
+        }
+        let deadline = batch
+            .deadline()
+            .into_iter()
+            .chain(state.renames.deadline())
+            .min();
+        let received = match deadline {
+            Some(at) => rx.recv_timeout(at.saturating_duration_since(Instant::now())),
+            None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        };
+        match received {
+            Ok(event) => incoming = state.process(event, Instant::now()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let now = Instant::now();
+                let mut final_events = Vec::new();
+                for output in state.expire(now + RENAME_TTL) {
+                    match output {
+                        Output::File(kind, path) => batch.add(path, kind, now),
+                        output => final_events.push(output),
+                    }
+                }
+                final_events.extend(batch.flush());
+                if !final_events.is_empty() { emit(final_events); }
+                break;
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct WatcherState(std::sync::Mutex<Option<notify::RecommendedWatcher>>);
+impl WatcherState {
+    pub fn replace_with(&self, create: impl FnOnce() -> Result<notify::RecommendedWatcher, String>) -> Result<(), String> {
+        let mut watcher = self.0.lock().map_err(|_| "Watcher state is unavailable".to_string())?;
+        let replacement = create()?;
+        *watcher = Some(replacement);
+        Ok(())
+    }
+    pub fn stop(&self) -> Result<(), String> {
+        self.0.lock().map_err(|_| "Watcher state is unavailable".to_string())?.take();
+        Ok(())
+    }
+}
+
+fn enqueue_event(tx: &mpsc::SyncSender<Event>, event: Event, overflow: &AtomicBool) {
+    if let Err(mpsc::TrySendError::Full(_)) = tx.try_send(event) { overflow.store(true, Ordering::Release); }
+}
+
+pub fn start_watcher(
+    app_handle: AppHandle,
+    paths: &[String],
+) -> Result<notify::RecommendedWatcher, String> {
+    let roots: Vec<PathBuf> = paths
+        .iter()
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+    let overflow = Arc::new(AtomicBool::new(false));
+    let callback_overflow = overflow.clone();
+    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        match res {
+            Ok(event) => enqueue_event(&tx, event, &callback_overflow),
+            Err(_) => {
+                callback_overflow.store(true, Ordering::Release);
+                enqueue_event(&tx, Event::new(EventKind::Other), &callback_overflow);
+            }
+        }
+    })
+    .map_err(|error| format!("Watcher creation failed: {error}"))?;
+    watch_roots(&mut watcher, &roots)?;
+    std::thread::Builder::new().name("miaoyan-file-events".into()).spawn(move || {
+        run_events(rx, roots, overflow, |outputs| {
+            let mut files: HashMap<&str, Vec<String>> = HashMap::new();
+            for output in outputs {
+                match output {
+                    Output::File(kind, path) => files
+                        .entry(kind)
+                        .or_default()
+                        .push(path.to_string_lossy().into_owned()),
+                    Output::Structure {
+                        kind,
+                        path,
+                        from,
+                        to,
+                    } => {
+                        let _ = app_handle.emit(
+                            "fs-structure",
+                            serde_json::json!({
+                                "kind": kind,
+                                "path": path.as_ref().map(|p| p.to_string_lossy()),
+                                "from": from.as_ref().map(|p| p.to_string_lossy()),
+                                "to": to.as_ref().map(|p| p.to_string_lossy()),
+                            }),
+                        );
+                    }
+                }
+            }
+            for (kind, paths) in files {
+                let _ = app_handle.emit(
+                    "fs-change",
+                    serde_json::json!({ "type": kind, "paths": paths }),
+                );
+            }
+        })
+    }).map_err(|error| format!("Watcher worker creation failed: {error}"))?;
+    Ok(watcher)
+}
+
+/// One recursive registration per root. Per-directory Windows handles prevent
+/// users from renaming/removing ancestor directories (ERROR_ACCESS_DENIED).
+fn watch_roots<W: Watcher>(watcher: &mut W, roots: &[PathBuf]) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    for root in roots {
+        let key = std::fs::canonicalize(root).map_err(|error| format!("Cannot watch {}: {error}", root.display()))?;
+        if seen.insert(key) { watcher.watch(root, RecursiveMode::Recursive).map_err(|error| format!("Cannot watch {}: {error}", root.display()))?; }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    fn source(path: &str, tracker: Option<usize>, at: Instant) -> RenameSource {
+        RenameSource {
+            path: PathBuf::from(path),
+            tracker,
+            at,
+        }
+    }
+
+    #[test]
+    fn coalescing_uses_the_final_state() {
+        for (old, new, expected) in [
+            ("remove", "create", "create"),
+            ("remove", "modify", "modify"),
+            ("create", "remove", "remove"),
+            ("modify", "remove", "remove"),
+            ("create", "modify", "create"),
+            ("modify", "create", "create"),
+            ("create", "create", "create"),
+            ("modify", "modify", "modify"),
+            ("remove", "remove", "remove"),
+        ] {
+            assert_eq!(merge_event_type(old, new), expected, "{old} -> {new}");
+        }
+    }
+
+    #[test]
+    fn invalid_roots_fail_and_failed_replacement_keeps_the_previous_watcher() {
+        let fixture = Fixture::new();
+        let state = WatcherState::default();
+        let (tx, rx) = mpsc::channel();
+        state.replace_with(|| {
+            let mut watcher = notify::recommended_watcher(move |result: Result<Event, notify::Error>| { let _ = tx.send(result); }).map_err(|error| error.to_string())?;
+            watch_roots(&mut watcher, std::slice::from_ref(&fixture.0))?;
+            Ok(watcher)
+        }).unwrap();
+        assert!(state.replace_with(|| {
+            let mut watcher = notify::recommended_watcher(|_: Result<Event, notify::Error>| {}).map_err(|error| error.to_string())?;
+            watch_roots(&mut watcher, &[fixture.0.join("missing")])?;
+            Ok(watcher)
+        }).is_err());
+        let path = fixture.0.join("still-watched.md");
+        std::fs::write(&path, "content").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let event = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).expect("Previous watcher was lost").unwrap();
+            if event.paths.contains(&path) { break; }
+        }
+        state.stop().unwrap();
+    }
+
+    #[test]
+    fn overflow_is_nonblocking_and_requests_a_final_state_refresh() {
+        let fixture = Fixture::new();
+        let overflow = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::sync_channel(1);
+        let event = || Event::new(EventKind::Create(notify::event::CreateKind::Folder)).add_path(fixture.0.clone());
+        enqueue_event(&tx, event(), &overflow);
+        enqueue_event(&tx, event(), &overflow);
+        assert!(overflow.load(Ordering::Acquire));
+        drop(tx);
+        let mut output = Vec::new();
+        run_events(rx, vec![fixture.0.clone()], overflow.clone(), |events| output.extend(events));
+        assert!(output.contains(&Output::File("rescan", fixture.0.clone())));
+        assert!(!overflow.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_large_native_event_is_split_into_bounded_file_batches() {
+        let fixture = Fixture::new();
+        let (tx, rx) = mpsc::channel();
+        let mut event = Event::new(EventKind::Create(notify::event::CreateKind::File));
+        for index in 0..1400 { event = event.add_path(fixture.0.join(format!("{index}.md"))); }
+        tx.send(event).unwrap(); drop(tx);
+        let mut emitted = 0;
+        run_events(rx, vec![fixture.0.clone()], Arc::new(AtomicBool::new(false)), |batch| {
+            assert!(batch.len() <= MAX_PENDING_EVENTS, "Native batch exceeded its budget: {}", batch.len());
+            emitted += batch.len();
+        });
+        assert_eq!(emitted, 1400);
+    }
+
+    #[test]
+    fn disconnect_flushes_pending_files_and_unpaired_renames() {
+        let fixture = Fixture::new();
+        let note = fixture.0.join("note.md");
+        std::fs::write(&note, "content").unwrap();
+        let moved = fixture.0.join("moved-out");
+        let (tx, rx) = mpsc::channel();
+        tx.send(Event::new(EventKind::Create(notify::event::CreateKind::File)).add_path(note.clone())).unwrap();
+        tx.send(Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From))).add_path(moved.clone())).unwrap();
+        drop(tx);
+        let mut output = Vec::new();
+        run_events(rx, vec![fixture.0.clone()], Arc::new(AtomicBool::new(false)), |events| output.extend(events));
+        assert!(output.contains(&Output::File("create", note)));
+        assert!(output.contains(&Output::structure("path-remove", &moved)));
+    }
+
+    #[test]
+    fn unknown_removal_handles_directories_named_like_notes_without_removing_recreations() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("docs.md");
+        let mut state = EventState::new(vec![fixture.0.clone()]);
+        let event = || Event::new(EventKind::Remove(RemoveKind::Any)).add_path(path.clone());
+        let removed = state.process(event(), Instant::now());
+        assert!(removed.contains(&Output::structure("path-remove", &path)));
+        std::fs::create_dir(&path).unwrap();
+        let recreated = state.process(event(), Instant::now());
+        assert!(!recreated.contains(&Output::structure("path-remove", &path)));
+        assert!(recreated.contains(&Output::structure("dir-create", &path)));
+    }
+
+    #[test]
+    fn ambiguous_sources_must_not_be_paired_by_fifo() {
+        let now = Instant::now();
+        let mut pending = PendingRenames::default();
+        pending.push(source("root/first", None, now));
+        pending.push(source("root/second", None, now));
+        assert_eq!(pending.take(Path::new("root/to"), None, true), None);
+        assert_eq!(
+            pending.expire(now + RENAME_TTL),
+            vec![PathBuf::from("root/first"), PathBuf::from("root/second")]
+        );
+    }
+
+    #[test]
+    fn expired_sources_must_not_be_silently_discarded() {
+        let root = std::env::temp_dir().join(format!("miaoyan-missing-{}", uuid::Uuid::new_v4()));
+        let path = root.join("moved-out");
+        let now = Instant::now();
+        let mut state = EventState::new(vec![root]);
+        state.process(
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+                .add_path(path.clone()),
+            now,
+        );
+        assert!(state
+            .expire(now + RENAME_TTL - Duration::from_nanos(1))
+            .is_empty());
+        assert_eq!(
+            state.expire(now + RENAME_TTL),
+            vec![Output::structure("path-remove", &path)]
+        );
+        assert!(state.renames.deadline().is_none());
+    }
+
+    #[test]
+    fn trackers_pair_out_of_order_and_never_fall_back_to_fifo() {
+        let now = Instant::now();
+        let mut pending = PendingRenames::default();
+        pending.push(source("root/one", Some(1), now));
+        pending.push(source("root/two", Some(2), now));
+        assert_eq!(
+            pending.take(Path::new("other/new-two"), Some(2), false),
+            Some(PathBuf::from("root/two"))
+        );
+        assert_eq!(pending.take(Path::new("root/new-one"), Some(3), true), None);
+        assert_eq!(pending.take(Path::new("root/new-one"), None, true), None);
+        assert_eq!(
+            pending.take(Path::new("root/new-one"), Some(1), false),
+            Some(PathBuf::from("root/one"))
+        );
+    }
+
+    #[test]
+    fn trackerless_pairing_is_adjacent_single_source_same_parent_only() {
+        let mut pending = PendingRenames::default();
+        pending.push(source("root/old", None, Instant::now()));
+        assert_eq!(pending.take(Path::new("elsewhere/new"), None, true), None);
+        assert_eq!(pending.take(Path::new("root/new"), None, false), None);
+        assert_eq!(
+            pending.take(Path::new("root/new"), None, true),
+            Some(PathBuf::from("root/old"))
+        );
+    }
+
+    #[test]
+    fn rename_queue_overflow_returns_sources_for_removal() {
+        let now = Instant::now();
+        let mut pending = PendingRenames::default();
+        for i in 0..MAX_PENDING_RENAMES {
+            assert!(pending
+                .push(source(&format!("root/{i}"), Some(i), now))
+                .is_none());
+        }
+        assert_eq!(
+            pending.push(source("root/overflow", None, now)),
+            Some(PathBuf::from("root/0"))
+        );
+        assert_eq!(pending.expire(now + RENAME_TTL).len(), MAX_PENDING_RENAMES);
+        assert!(pending.deadline().is_none());
+    }
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root =
+                std::env::temp_dir().join(format!("miaoyan-watcher-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn both_and_split_renames_cross_ignored_boundary_on_each_side() {
+        for split in [false, true] {
+            let fixture = Fixture::new();
+            let root = &fixture.0;
+            let normal = root.join("normal");
+            let hidden = root.join(".hidden");
+            std::fs::create_dir(&hidden).unwrap();
+            let mut state = EventState::new(vec![root.clone()]);
+            let now = Instant::now();
+            let mut rename = |from: &Path, to: &Path| {
+                if split {
+                    state.process(
+                        Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+                            .add_path(from.to_path_buf())
+                            .set_tracker(7),
+                        now,
+                    );
+                    state.process(
+                        Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To)))
+                            .add_path(to.to_path_buf())
+                            .set_tracker(7),
+                        now,
+                    )
+                } else {
+                    state.process(
+                        Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                            .add_path(from.to_path_buf())
+                            .add_path(to.to_path_buf()),
+                        now,
+                    )
+                }
+            };
+            assert_eq!(
+                rename(&normal, &hidden),
+                vec![Output::structure("path-remove", &normal)]
+            );
+            std::fs::rename(&hidden, &normal).unwrap();
+            assert_eq!(
+                rename(&hidden, &normal),
+                vec![Output::structure("dir-create", &normal)]
+            );
+        }
+    }
+
+    #[test]
+    fn supported_to_unsupported_extension_removes_old_note() {
+        let fixture = Fixture::new();
+        let from = fixture.0.join("old.md");
+        let to = fixture.0.join("new.bin");
+        std::fs::write(&to, b"synthetic").unwrap();
+        let mut state = EventState::new(vec![fixture.0.clone()]);
+        assert_eq!(
+            state.process(
+                Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                    .add_path(from.clone())
+                    .add_path(to),
+                Instant::now()
+            ),
+            vec![Output::File("remove", from)]
+        );
+    }
+
+    #[test]
+    fn explicit_hidden_root_is_visible_even_under_another_root() {
+        let roots = [PathBuf::from("root"), PathBuf::from("root/.selected")];
+        assert!(!under_ignored_relative(
+            Path::new("root/.selected/note.md"),
+            &roots
+        ));
+        assert!(under_ignored_relative(
+            Path::new("root/.selected/.nested/note.md"),
+            &roots
+        ));
+        assert!(under_ignored_relative(
+            Path::new("elsewhere/note.md"),
+            &roots
+        ));
+    }
+
+    #[test]
+    fn recreated_file_is_not_emitted_as_removed_even_without_create_event() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("note.md");
+        let mut batch = FileBatch::default();
+        batch.add(path.clone(), "remove", Instant::now());
+        std::fs::write(&path, b"replacement").unwrap();
+        assert_eq!(batch.flush(), vec![Output::File("modify", path)]);
+        assert!(batch.deadline().is_none());
+    }
+
+    #[test]
+    fn event_loop_expires_from_without_any_following_event() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("moved-out");
+        let (tx, rx) = mpsc::channel();
+        let (out_tx, out_rx) = mpsc::channel();
+        let root = fixture.0.clone();
+        let worker = std::thread::spawn(move || {
+            run_events(rx, vec![root], Arc::new(AtomicBool::new(false)), |events| {
+                let _ = out_tx.send(events);
+            })
+        });
+        tx.send(
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+                .add_path(path.clone()),
+        )
+        .unwrap();
+        let output = out_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(output, vec![Output::structure("path-remove", &path)]);
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn unrelated_events_disable_trackerless_pairing() {
+        let fixture = Fixture::new();
+        let from = fixture.0.join("old");
+        let to = fixture.0.join("new");
+        std::fs::create_dir(&to).unwrap();
+        let mut state = EventState::new(vec![fixture.0.clone()]);
+        let now = Instant::now();
+        state.process(
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+                .add_path(from.clone()),
+            now,
+        );
+        state.process(
+            Event::new(EventKind::Access(notify::event::AccessKind::Any)),
+            now,
+        );
+        let events = state.process(
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To))).add_path(to.clone()),
+            now,
+        );
+        assert_eq!(events, vec![Output::structure("dir-create", &to)]);
+        assert_eq!(
+            state.expire(now + RENAME_TTL),
+            vec![Output::structure("path-remove", &from)]
+        );
+    }
+
+    #[test]
+    fn expired_recreated_directory_is_not_removed() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("recreated");
+        let now = Instant::now();
+        let mut state = EventState::new(vec![fixture.0.clone()]);
+        state.process(
+            Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+                .add_path(path.clone()),
+            now,
+        );
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(
+            state.expire(now + RENAME_TTL),
+            vec![Output::structure("dir-create", &path)]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_renames_into_and_out_of_hidden_directories_are_reported() {
+        let fixture = Fixture::new();
+        let normal = fixture.0.join("normal");
+        let hidden = fixture.0.join(".hidden");
+        std::fs::create_dir(&normal).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let (out_tx, out_rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = tx.send(event);
+            }
+        })
+        .unwrap();
+        watch_roots(&mut watcher, std::slice::from_ref(&fixture.0)).unwrap();
+        let root = fixture.0.clone();
+        let worker = std::thread::spawn(move || {
+            run_events(rx, vec![root], Arc::new(AtomicBool::new(false)), |events| {
+                let _ = out_tx.send(events);
+            })
+        });
+        for (from, to, expected) in [
+            (&normal, &hidden, Output::structure("path-remove", &normal)),
+            (&hidden, &normal, Output::structure("dir-create", &normal)),
+        ] {
+            std::fs::rename(from, to).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let events = out_rx
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .unwrap();
+                if events.contains(&expected) {
+                    break;
+                }
+            }
+        }
+        drop(watcher);
+        worker.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_file_replacement_never_emits_a_stale_remove() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("note.md");
+        std::fs::write(&path, b"old").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let (out_tx, out_rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = tx.send(event);
+            }
+        })
+        .unwrap();
+        watch_roots(&mut watcher, std::slice::from_ref(&fixture.0)).unwrap();
+        let root = fixture.0.clone();
+        let worker = std::thread::spawn(move || {
+            run_events(rx, vec![root], Arc::new(AtomicBool::new(false)), |events| {
+                let _ = out_tx.send(events);
+            })
+        });
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        let deadline = Instant::now() + RENAME_TTL + COALESCE_WINDOW * 3;
+        let mut observed = false;
+        loop {
+            match out_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(events) => {
+                    for event in events {
+                        if let Output::File(kind, changed) = event {
+                            if changed == path {
+                                assert_ne!(kind, "remove");
+                                observed = true;
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(error) => panic!("watcher disconnected: {error}"),
+            }
+        }
+        drop(watcher);
+        worker.join().unwrap();
+        assert!(observed, "replacement should produce a note update");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_directory_move_out_eventually_removes_source() {
+        let watched = Fixture::new();
+        let outside = Fixture::new();
+        let child = watched.0.join("child");
+        std::fs::create_dir_all(child.join("nested")).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let (out_tx, out_rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = tx.send(event);
+            }
+        })
+        .unwrap();
+        watch_roots(&mut watcher, std::slice::from_ref(&watched.0)).unwrap();
+        let root = watched.0.clone();
+        let worker = std::thread::spawn(move || {
+            run_events(rx, vec![root], Arc::new(AtomicBool::new(false)), |events| {
+                let _ = out_tx.send(events);
+            })
+        });
+        std::fs::rename(&child, outside.0.join("moved")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let events = out_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap();
+            if events.contains(&Output::structure("path-remove", &child)) {
+                break;
+            }
+        }
+        drop(watcher);
+        worker.join().unwrap();
     }
 }
 
@@ -280,10 +976,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "miaoyan-watcher-{}-{unique}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("miaoyan-watcher-{}-{unique}", std::process::id()))
     }
 
     #[test]
@@ -292,12 +985,11 @@ mod tests {
         let child = root.join("child");
         fs::create_dir_all(child.join("grandchild")).unwrap();
 
-        let mut watcher =
-            notify::recommended_watcher(|res: Result<Event, notify::Error>| {
-                let _ = res;
-            })
-            .unwrap();
-        watch_roots(&mut watcher, std::slice::from_ref(&root));
+        let mut watcher = notify::recommended_watcher(|res: Result<Event, notify::Error>| {
+            let _ = res;
+        })
+        .unwrap();
+        watch_roots(&mut watcher, std::slice::from_ref(&root)).unwrap();
 
         // 回归：逐目录监听时，grandchild 的句柄会让 parent/child 重命名报“拒绝访问”
         let renamed = root.join("child-renamed");
@@ -314,16 +1006,34 @@ mod tests {
     fn child_entry_changes_on_directory_are_not_structure_events() {
         use notify::event::{CreateKind, RemoveKind};
 
-        assert!(is_child_change_noise(&EventKind::Modify(ModifyKind::Any), true));
-        assert!(is_child_change_noise(&EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)), true));
-        assert!(!is_child_change_noise(&EventKind::Modify(ModifyKind::Any), false));
+        assert!(is_child_change_noise(
+            &EventKind::Modify(ModifyKind::Any),
+            true
+        ));
+        assert!(is_child_change_noise(
+            &EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)),
+            true
+        ));
+        assert!(!is_child_change_noise(
+            &EventKind::Modify(ModifyKind::Any),
+            false
+        ));
         assert!(!is_child_change_noise(
             &EventKind::Modify(ModifyKind::Name(RenameMode::To)),
             true
         ));
-        assert!(!is_child_change_noise(&EventKind::Create(CreateKind::Any), true));
-        assert!(!is_child_change_noise(&EventKind::Remove(RemoveKind::Any), true));
-        assert!(!is_child_change_noise(&EventKind::Modify(ModifyKind::Any), false));
+        assert!(!is_child_change_noise(
+            &EventKind::Create(CreateKind::Any),
+            true
+        ));
+        assert!(!is_child_change_noise(
+            &EventKind::Remove(RemoveKind::Any),
+            true
+        ));
+        assert!(!is_child_change_noise(
+            &EventKind::Modify(ModifyKind::Any),
+            false
+        ));
     }
 
     #[test]
@@ -333,14 +1043,13 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let mut watcher =
-            notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-                if let Ok(event) = res {
-                    let _ = tx.send(event);
-                }
-            })
-            .unwrap();
-        watch_roots(&mut watcher, std::slice::from_ref(&root));
+        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = tx.send(event);
+            }
+        })
+        .unwrap();
+        watch_roots(&mut watcher, std::slice::from_ref(&root)).unwrap();
 
         fs::write(nested.join("note.md"), "hello").unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);

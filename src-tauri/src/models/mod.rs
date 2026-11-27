@@ -19,6 +19,7 @@ pub struct NoteMetadata {
 pub struct NoteContent {
     pub id: String,
     pub content: String,
+    pub disk_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

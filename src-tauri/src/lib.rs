@@ -27,9 +27,20 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .manage(file_association::PendingOpenFiles(std::sync::Mutex::new(Vec::new())))
+        .manage(services::persistence::Persistence::new(services::storage::get_config_dir()))
+        .manage(services::watcher::WatcherState::default())
+        .manage(services::search::SearchState::default())
+        .manage(services::scanning::ScanState::default())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window.app_handle().state::<services::search::SearchState>().stop(window.label());
+                window.app_handle().state::<services::scanning::ScanState>().stop(window.label());
+                if window.label() == "main" {
+                    let _ = window.app_handle().state::<services::watcher::WatcherState>().stop();
+                }
+            }
+        })
         .setup(|app| {
             // 冷启动：由文件关联拉起时，从启动参数收集 .md/.markdown 路径
             let args: Vec<String> = std::env::args().collect();
@@ -60,15 +71,26 @@ pub fn run() {
             get_projects,
             get_all_notes,
             scan_folder,
+            start_scan_session,
+            invalidate_scan,
+            release_scan_lane,
+            read_directory_snapshot,
+            scope_roots_overlap,
             get_notes_in_folder,
             get_notes_metadata,
             read_note,
             write_note,
+            save_document_copy,
+            resolve_document,
+            get_document_recoveries,
+            retry_document_recovery,
             create_note,
             delete_note,
             rename_note,
             create_folder,
             search_notes,
+            start_search_session,
+            invalidate_search,
             get_config,
             save_config,
             parse_markdown,
@@ -98,6 +120,7 @@ pub fn run() {
             reveal_in_finder,
             open_in_terminal,
             write_log,
+            write_logs,
             read_annotations,
             write_annotations,
             delete_annotations,
